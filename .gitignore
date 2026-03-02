@@ -1,0 +1,21 @@
+# API keys
+.env
+
+# Downloaded PDFs and all generated data
+data/raw_pdfs/
+data/extracted_text/
+data/segmented/
+data/structured/
+data/output/
+data/catalogue.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
