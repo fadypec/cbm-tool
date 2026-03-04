@@ -5,3 +5,6 @@ anthropic>=0.40
 rapidfuzz>=3.5
 tqdm>=4.66
 python-dotenv>=1.0
+pdf2image>=1.16
+pytesseract>=0.3
+google-cloud-vision>=3.0

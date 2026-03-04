@@ -9,6 +9,10 @@ resolution using rapidfuzz name matching, and writes four output files:
   data/output/summary_stats.json
   data/output/entity_registry.json
 
+Also reads data/structured/*_form_g.json (if present) and writes:
+  data/output/all_vaccine_facilities.csv
+  data/output/all_vaccine_facilities.json
+
 Usage:
     python scripts/05_assemble_output.py
 """
@@ -46,7 +50,13 @@ CSV_FIELDS = [
     "city", "address", "funding_sources", "mod_funded",
     "has_bsl4", "bsl4_area_m2", "has_bsl3", "bsl3_area_m2",
     "highest_containment", "agents_summary", "agents_redacted",
-    "confidence", "canonical_facility_id", "source_document",
+    "confidence", "translated", "canonical_facility_id", "source_document",
+]
+
+CSV_FIELDS_G = [
+    "country_iso3", "year", "facility_name",
+    "city", "address", "diseases_covered", "vaccines_summary",
+    "confidence", "translated", "source_document",
 ]
 
 
@@ -73,12 +83,30 @@ class UnionFind:
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 
+def load_catalogue_index() -> dict[str, str]:
+    """Return {source_id: language} from catalogue.json."""
+    cat_path = PROJECT_ROOT / "data" / "catalogue.json"
+    if not cat_path.exists():
+        return {}
+    catalogue = json.loads(cat_path.read_text(encoding="utf-8"))
+    return {e["id"]: e.get("language", "en") for e in catalogue}
+
+
 def load_all_facilities() -> list[dict]:
     """Return a flat list of all facility dicts from every structured JSON."""
     records: list[dict] = []
     for path in sorted(STRUCTURED_DIR.glob("*_form_a1.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
         records.extend(data.get("facilities", []))
+    return records
+
+
+def load_all_vaccine_facilities() -> list[dict]:
+    """Return a flat list of all vaccine facility dicts from every Form G JSON."""
+    records: list[dict] = []
+    for path in sorted(STRUCTURED_DIR.glob("*_form_g.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        records.extend(data.get("vaccine_facilities", []))
     return records
 
 
@@ -137,13 +165,22 @@ def resolve_entities(records: list[dict]) -> dict[int, str]:
 # ── Flattening ────────────────────────────────────────────────────────────────
 
 
-def flatten_record(rec: dict, cid: str) -> dict:
+def flatten_record(rec: dict, cid: str, cat_index: dict[str, str]) -> dict:
     """Flatten one facility dict into a CSV-ready dict."""
     meta    = rec.get("extraction_metadata", {}) or {}
     loc     = rec.get("location", {})             or {}
     funding = rec.get("funding", {})              or {}
     cont    = rec.get("containment", {})          or {}
     agents  = rec.get("agents", {})               or {}
+
+    # translated: use the field set by Claude if present; fall back to
+    # catalogue language (anything other than English means AI-translated).
+    source_id = meta.get("source_id", "")
+    if "translated" in rec:
+        translated = rec["translated"]
+    else:
+        lang = meta.get("language") or cat_index.get(source_id, "en")
+        translated = lang != "en"
 
     return {
         "country_iso3":        meta.get("country_iso3"),
@@ -162,8 +199,33 @@ def flatten_record(rec: dict, cid: str) -> dict:
         "agents_summary":      "; ".join(agents.get("listed") or []),
         "agents_redacted":     agents.get("redacted"),
         "confidence":          rec.get("confidence"),
+        "translated":          translated,
         "canonical_facility_id": cid,
         "source_document":     meta.get("source_id"),
+    }
+
+
+def flatten_vaccine_record(rec: dict) -> dict:
+    """Flatten one vaccine facility dict into a CSV-ready dict."""
+    meta = rec.get("extraction_metadata", {}) or {}
+    loc  = rec.get("location", {}) or {}
+
+    if "translated" in rec:
+        translated = rec["translated"]
+    else:
+        translated = meta.get("language", "en") != "en"
+
+    return {
+        "country_iso3":     meta.get("country_iso3"),
+        "year":             meta.get("year"),
+        "facility_name":    rec.get("facility_name"),
+        "city":             loc.get("city"),
+        "address":          loc.get("address"),
+        "diseases_covered": rec.get("diseases_covered"),
+        "vaccines_summary": "; ".join(rec.get("vaccines") or []),
+        "confidence":       rec.get("confidence"),
+        "translated":       translated,
+        "source_document":  meta.get("source_id"),
     }
 
 
@@ -226,7 +288,7 @@ def build_entity_registry(
 
 
 def build_summary_stats(
-    flat: list[dict], registry: list[dict]
+    flat: list[dict], registry: list[dict], vaccine_flat: list[dict] | None = None
 ) -> dict:
     """Compute dataset-level summary statistics."""
     confidences = [r["confidence"] for r in flat if r["confidence"] is not None]
@@ -245,7 +307,7 @@ def build_summary_stats(
         if cont in ("BSL-4", "BSL-3"):
             bsl3_by_country[country] += 1
 
-    return {
+    result = {
         "total_facility_year_records": len(flat),
         "unique_facilities":           len(registry),
         "countries_covered":           countries,
@@ -256,6 +318,11 @@ def build_summary_stats(
         "bsl4_facilities_by_country":  dict(sorted(bsl4_by_country.items())),
         "bsl3_facilities_by_country":  dict(sorted(bsl3_by_country.items())),
     }
+    if vaccine_flat is not None:
+        result["total_vaccine_facility_year_records"] = len(vaccine_flat)
+        vc = sorted({r["country_iso3"] for r in vaccine_flat if r["country_iso3"]})
+        result["vaccine_countries_covered"] = vc
+    return result
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -268,6 +335,8 @@ def main() -> None:
     records = load_all_facilities()
     log.info("Loaded %d facility-year records", len(records))
 
+    cat_index = load_catalogue_index()
+
     log.info("Resolving entities (threshold=%d)…", SIMILARITY_THRESHOLD)
     id_map = resolve_entities(records)
     unique = len({v for v in id_map.values()})
@@ -275,7 +344,7 @@ def main() -> None:
              len(records), unique)
 
     # Flatten and sort
-    flat = [flatten_record(rec, id_map[i]) for i, rec in enumerate(records)]
+    flat = [flatten_record(rec, id_map[i], cat_index) for i, rec in enumerate(records)]
     flat.sort(key=lambda r: (r["country_iso3"] or "", r["year"] or 0, r["facility_name"] or ""))
 
     # ── all_facilities.csv ────────────────────────────────────────────────────
@@ -301,8 +370,31 @@ def main() -> None:
     )
     log.info("Wrote %s (%d entities)", reg_path, len(registry))
 
+    # ── vaccine facilities (Form G) ───────────────────────────────────────────
+    vaccine_records = load_all_vaccine_facilities()
+    vaccine_flat: list[dict] | None = None
+    if vaccine_records:
+        log.info("Loaded %d vaccine facility-year records (Form G)", len(vaccine_records))
+        vaccine_flat = [flatten_vaccine_record(r) for r in vaccine_records]
+        vaccine_flat.sort(key=lambda r: (r["country_iso3"] or "", r["year"] or 0, r["facility_name"] or ""))
+
+        vcsv_path = OUTPUT_DIR / "all_vaccine_facilities.csv"
+        with vcsv_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS_G)
+            writer.writeheader()
+            writer.writerows(vaccine_flat)
+        log.info("Wrote %s (%d rows)", vcsv_path, len(vaccine_flat))
+
+        vjson_path = OUTPUT_DIR / "all_vaccine_facilities.json"
+        vjson_path.write_text(
+            json.dumps(vaccine_flat, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        log.info("Wrote %s", vjson_path)
+    else:
+        log.info("No Form G data found; skipping vaccine facility outputs")
+
     # ── summary_stats.json ────────────────────────────────────────────────────
-    stats = build_summary_stats(flat, registry)
+    stats = build_summary_stats(flat, registry, vaccine_flat)
     stats_path = OUTPUT_DIR / "summary_stats.json"
     stats_path.write_text(
         json.dumps(stats, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -317,6 +409,8 @@ def main() -> None:
     print("\n── Summary ──────────────────────────────────────────────────")
     print(f"  Facility-year records:   {stats['total_facility_year_records']}")
     print(f"  Unique facilities:       {stats['unique_facilities']}")
+    if stats.get("total_vaccine_facility_year_records"):
+        print(f"  Vaccine facility recs:   {stats['total_vaccine_facility_year_records']}")
     print(f"  Countries covered:       {len(stats['countries_covered'])}")
     print(f"  Years covered:           {min(years)}–{max(years)}")
     print(f"  Mean extraction conf.:   {stats['mean_extraction_confidence']:.3f}")
