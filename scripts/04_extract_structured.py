@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -42,6 +43,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -75,6 +78,19 @@ FORM_A2_PROG_RE = re.compile(r"(?m)^1\.\s+State the objectives")
 FORM_A2_FAC_RE  = re.compile(r"(?m)^1\.\s+What is the name of the facility")
 FORM_A2_CHUNK_MAX_CHARS = 12_000   # larger than A1 — each section may be 4-20 KB
 FORM_A2_PROG_LOOKBACK   = 400      # chars before "1. State the objectives" to include programme heading
+
+# Pre-truncation: cut the parts of each section that contain no extractable data
+# Part 2(ii): field 1 (objectives narrative) is often 5-10 pages; fields 2-7 hold the key data
+FORM_A2_PROG_FIELD2_RE   = re.compile(r"(?m)^2\.\s+State the total funding")
+FORM_A2_PROG_FIELD1_MAX  = 2_000   # keep at most 2000 chars of objectives before field 2
+
+# Part 2(iii): field 4(viii)/(ix) is a publications list — can be 50K+ chars; not extracted
+# Some docs label it (viii), others (ix) depending on whether policy is a separate sub-field
+FORM_A2_FAC_PUBLIST_RE   = re.compile(r"(?m)^\((?:viii|ix)\)\s+Provide a list of publicly")
+FORM_A2_FAC_FIELD5_RE    = re.compile(r"(?m)^5\.\s+Briefly describe the biological defence work")
+FORM_A2_FAC_FIELD5_MAX   = 1_500   # keep at most 1500 chars of field 5 work description
+
+PROGRESS_INTERVAL = 10             # emit a log.info progress line every N documents
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
@@ -313,6 +329,41 @@ def split_into_chunks(text: str, max_chars: int = CHUNK_MAX_CHARS) -> list[str]:
     return chunks
 
 
+def _truncate_a2_section(section: str, is_programme: bool) -> str:
+    """
+    Remove high-volume, low-value text from a Form A Part 2 section before
+    sending it to Claude, dramatically reducing input tokens.
+
+    For Part 2(ii) programme sections:
+      Field 1 (objectives) is often 5-10 pages of narrative. We keep at most
+      FORM_A2_PROG_FIELD1_MAX chars before field 2, which holds all the
+      structured data we actually extract (funding, contractors, etc.).
+
+    For Part 2(iii) facility sections:
+      Field 4(viii)/(ix) is a publications list — potentially 50 KB of citations
+      that we never extract. We truncate there and re-attach a capped version of
+      field 5 (work description) if present.
+    """
+    if is_programme:
+        m = FORM_A2_PROG_FIELD2_RE.search(section)
+        if m and m.start() > FORM_A2_PROG_FIELD1_MAX:
+            section = (
+                section[:FORM_A2_PROG_FIELD1_MAX]
+                + "\n[...objectives truncated...]\n\n"
+                + section[m.start():]
+            )
+    else:
+        m = FORM_A2_FAC_PUBLIST_RE.search(section)
+        if m:
+            truncated = section[:m.start()]
+            m5 = FORM_A2_FAC_FIELD5_RE.search(section)
+            if m5:
+                field5 = section[m5.start():m5.start() + FORM_A2_FAC_FIELD5_MAX]
+                truncated += "\n\n" + field5
+            section = truncated
+    return section
+
+
 def split_into_chunks_a2(text: str) -> list[str]:
     """
     Split form_a2 text at programme (2ii) and facility (2iii) boundaries.
@@ -351,11 +402,14 @@ def split_into_chunks_a2(text: str) -> list[str]:
     first_start = adj_positions[0]
     preamble = text[:first_start].strip()
 
-    # Build sections
+    # Build sections, truncating boilerplate before chunking
+    prog_pos_set = set(max(0, pos - FORM_A2_PROG_LOOKBACK) for pos in prog_positions)
     sections: list[str] = []
     for i, start in enumerate(adj_positions):
         end = adj_positions[i + 1] if i + 1 < len(adj_positions) else len(text)
-        sections.append(text[start:end].strip())
+        sec = text[start:end].strip()
+        is_programme = start in prog_pos_set
+        sections.append(_truncate_a2_section(sec, is_programme))
 
     # Chunk groups of sections that together fit within FORM_A2_CHUNK_MAX_CHARS.
     # A section larger than the limit is still sent as a single chunk.
@@ -907,6 +961,19 @@ def _write_output_a2(
     )
 
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format a duration in seconds as h:mm:ss or m:ss."""
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s   = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 
@@ -973,6 +1040,8 @@ def main() -> None:
     n_ok = n_skipped = n_failed = 0
     total_items = total_calls = total_in = total_out = 0
     results: list[dict] = []
+    n_total = len(targets)
+    run_start = time.time()
 
     if args.form_a2:
         desc = "Extracting Form A Part 2"
@@ -981,7 +1050,7 @@ def main() -> None:
     else:
         desc = "Extracting Form A Part 1"
 
-    for entry in tqdm(targets, desc=desc, unit="doc", dynamic_ncols=True):
+    for entry in tqdm(targets, desc=desc, unit="doc", dynamic_ncols=True, file=sys.stderr):
         if args.form_a2:
             result = process_entry_a2(entry, client, last_t)
             item_key = None   # sum programmes + facilities
@@ -1007,6 +1076,19 @@ def main() -> None:
             n_skipped += 1
         else:
             n_failed += 1
+
+        n_done = n_ok + n_skipped + n_failed
+        if n_total > 1 and n_done % PROGRESS_INTERVAL == 0:
+            elapsed  = time.time() - run_start
+            rate     = elapsed / n_done          # seconds per doc
+            remaining = rate * (n_total - n_done)
+            cost_so_far = total_in * 3e-6 + total_out * 15e-6
+            log.info(
+                "PROGRESS %d/%d (%.0f%%) — elapsed %s, remaining ~%s, %.1fs/doc, $%.2f spent",
+                n_done, n_total, 100 * n_done / n_total,
+                _fmt_duration(elapsed), _fmt_duration(remaining),
+                rate, cost_so_far,
+            )
 
     # ── Summary ───────────────────────────────────────────────────────────────
     item_label = "programmes+facilities" if args.form_a2 else ("vaccine facilities" if args.form_g else "facilities")
