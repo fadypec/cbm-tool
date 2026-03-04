@@ -63,6 +63,23 @@ CSV_FIELDS_FORM_COMPLIANCE = [
     "country_iso3", "year", "source_document", "form", "status",
 ]
 
+CSV_FIELDS_DEFENCE_PROGRAMMES = [
+    "country_iso3", "year", "programme_name", "responsible_org",
+    "objectives_summary", "research_areas", "total_funding_amount",
+    "total_funding_currency", "uses_contractors", "contractor_proportion_pct",
+    "confidence", "translated", "source_document",
+]
+
+CSV_FIELDS_DEFENCE_FACILITIES = [
+    "country_iso3", "year", "facility_name", "city", "address",
+    "bsl2_area_m2", "bsl3_area_m2", "bsl4_area_m2", "total_lab_area_m2",
+    "personnel_total", "personnel_military", "personnel_civilian",
+    "personnel_scientists", "personnel_engineers", "personnel_technicians",
+    "personnel_admin", "mod_funded", "funding_source",
+    "funding_research", "funding_development", "funding_te", "funding_currency",
+    "work_description", "confidence", "translated", "source_document",
+]
+
 CSV_FIELDS = [
     "country_iso3", "year", "facility_name", "responsible_org",
     "city", "address", "funding_sources", "mod_funded",
@@ -130,6 +147,81 @@ def load_all_vaccine_facilities() -> list[dict]:
         data = json.loads(path.read_text(encoding="utf-8"))
         records.extend(data.get("vaccine_facilities", []))
     return records
+
+
+# ── Form A Part 2 loaders ────────────────────────────────────────────────────
+
+
+def load_all_defence_programmes() -> list[dict]:
+    """Return a flat list of all defence programme dicts from Form A Part 2 JSONs."""
+    records: list[dict] = []
+    for path in sorted(STRUCTURED_DIR.glob("*_form_a2.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        records.extend(data.get("defence_programmes", []))
+    return records
+
+
+def load_all_defence_facilities() -> list[dict]:
+    """Return a flat list of all defence facility dicts from Form A Part 2 JSONs."""
+    records: list[dict] = []
+    for path in sorted(STRUCTURED_DIR.glob("*_form_a2.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        records.extend(data.get("defence_facilities", []))
+    return records
+
+
+def flatten_defence_programme(rec: dict) -> dict:
+    """Flatten one defence programme dict into a CSV-ready dict."""
+    meta = rec.get("extraction_metadata", {}) or {}
+    return {
+        "country_iso3":            meta.get("country_iso3"),
+        "year":                    meta.get("year"),
+        "programme_name":          rec.get("programme_name"),
+        "responsible_org":         rec.get("responsible_org"),
+        "objectives_summary":      rec.get("objectives_summary"),
+        "research_areas":          "; ".join(rec.get("research_areas") or []),
+        "total_funding_amount":    rec.get("total_funding_amount"),
+        "total_funding_currency":  rec.get("total_funding_currency"),
+        "uses_contractors":        rec.get("uses_contractors"),
+        "contractor_proportion_pct": rec.get("contractor_proportion_pct"),
+        "confidence":              rec.get("confidence"),
+        "translated":              rec.get("translated"),
+        "source_document":         meta.get("source_id"),
+    }
+
+
+def flatten_defence_facility(rec: dict) -> dict:
+    """Flatten one defence facility dict into a CSV-ready dict."""
+    meta = rec.get("extraction_metadata", {}) or {}
+    loc  = rec.get("location", {}) or {}
+    return {
+        "country_iso3":       meta.get("country_iso3"),
+        "year":               meta.get("year"),
+        "facility_name":      rec.get("facility_name"),
+        "city":               loc.get("city"),
+        "address":            loc.get("address"),
+        "bsl2_area_m2":       rec.get("bsl2_area_m2"),
+        "bsl3_area_m2":       rec.get("bsl3_area_m2"),
+        "bsl4_area_m2":       rec.get("bsl4_area_m2"),
+        "total_lab_area_m2":  rec.get("total_lab_area_m2"),
+        "personnel_total":    rec.get("personnel_total"),
+        "personnel_military": rec.get("personnel_military"),
+        "personnel_civilian": rec.get("personnel_civilian"),
+        "personnel_scientists": rec.get("personnel_scientists"),
+        "personnel_engineers":  rec.get("personnel_engineers"),
+        "personnel_technicians": rec.get("personnel_technicians"),
+        "personnel_admin":    rec.get("personnel_admin"),
+        "mod_funded":         rec.get("mod_funded"),
+        "funding_source":     rec.get("funding_source"),
+        "funding_research":   rec.get("funding_research"),
+        "funding_development": rec.get("funding_development"),
+        "funding_te":         rec.get("funding_te"),
+        "funding_currency":   rec.get("funding_currency"),
+        "work_description":   rec.get("work_description"),
+        "confidence":         rec.get("confidence"),
+        "translated":         rec.get("translated"),
+        "source_document":    meta.get("source_id"),
+    }
 
 
 # ── Compliance data ───────────────────────────────────────────────────────────
@@ -374,6 +466,8 @@ def build_summary_stats(
     registry: list[dict],
     vaccine_flat: list[dict] | None = None,
     compliance: list[dict] | None = None,
+    defence_programmes_flat: list[dict] | None = None,
+    defence_facilities_flat: list[dict] | None = None,
 ) -> dict:
     """Compute dataset-level summary statistics."""
     confidences = [r["confidence"] for r in flat if r["confidence"] is not None]
@@ -410,13 +504,18 @@ def build_summary_stats(
     if compliance is not None:
         total_docs = len(compliance)
         result["compliance_documents_tracked"] = total_docs
-        # Per-form substantive rate
         form_rates: dict[str, float] = {}
         for form in COMPLIANCE_FORMS:
             col = f"form_{form.lower()}"
             sub = sum(1 for r in compliance if r.get(col) == "substantive")
             form_rates[form] = round(sub / total_docs, 3) if total_docs else 0.0
         result["form_substantive_rate"] = form_rates
+    if defence_programmes_flat is not None:
+        result["total_defence_programme_records"] = len(defence_programmes_flat)
+        dc = sorted({r["country_iso3"] for r in defence_programmes_flat if r["country_iso3"]})
+        result["defence_programme_countries"] = dc
+    if defence_facilities_flat is not None:
+        result["total_defence_facility_records"] = len(defence_facilities_flat)
     return result
 
 
@@ -489,6 +588,34 @@ def main() -> None:
     else:
         log.info("No Form G data found; skipping vaccine facility outputs")
 
+    # ── Form A Part 2: defence programmes and facilities ──────────────────────
+    defence_programmes = load_all_defence_programmes()
+    defence_facilities = load_all_defence_facilities()
+    if defence_programmes or defence_facilities:
+        log.info("Loaded %d defence programmes, %d defence facilities (Form A Part 2)",
+                 len(defence_programmes), len(defence_facilities))
+
+        dp_flat = [flatten_defence_programme(r) for r in defence_programmes]
+        dp_flat.sort(key=lambda r: (r["country_iso3"] or "", r["year"] or 0, r["programme_name"] or ""))
+        dp_csv = OUTPUT_DIR / "defence_programmes.csv"
+        with dp_csv.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS_DEFENCE_PROGRAMMES)
+            writer.writeheader()
+            writer.writerows(dp_flat)
+        log.info("Wrote %s (%d rows)", dp_csv, len(dp_flat))
+
+        df_flat = [flatten_defence_facility(r) for r in defence_facilities]
+        df_flat.sort(key=lambda r: (r["country_iso3"] or "", r["year"] or 0, r["facility_name"] or ""))
+        df_csv = OUTPUT_DIR / "defence_facilities.csv"
+        with df_csv.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS_DEFENCE_FACILITIES)
+            writer.writeheader()
+            writer.writerows(df_flat)
+        log.info("Wrote %s (%d rows)", df_csv, len(df_flat))
+    else:
+        log.info("No Form A Part 2 data found; skipping defence programme outputs")
+        dp_flat = df_flat = []
+
     # ── compliance matrix (Form 0 / segmentation manifests) ──────────────────
     log.info("Loading compliance data from segmentation manifests …")
     compliance = load_compliance_data(catalogue)
@@ -521,7 +648,8 @@ def main() -> None:
     log.info("Wrote %s (%d rows)", form_comp_path, len(long_rows))
 
     # ── summary_stats.json ────────────────────────────────────────────────────
-    stats = build_summary_stats(flat, registry, vaccine_flat, compliance)
+    stats = build_summary_stats(flat, registry, vaccine_flat, compliance,
+                               dp_flat or None, df_flat or None)
     stats_path = OUTPUT_DIR / "summary_stats.json"
     stats_path.write_text(
         json.dumps(stats, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -538,6 +666,10 @@ def main() -> None:
     print(f"  Unique facilities:       {stats['unique_facilities']}")
     if stats.get("total_vaccine_facility_year_records"):
         print(f"  Vaccine facility recs:   {stats['total_vaccine_facility_year_records']}")
+    if stats.get("total_defence_programme_records"):
+        print(f"  Defence programme recs:  {stats['total_defence_programme_records']}")
+    if stats.get("total_defence_facility_records"):
+        print(f"  Defence facility recs:   {stats['total_defence_facility_records']}")
     print(f"  Countries covered:       {len(stats['countries_covered'])}")
     print(f"  Years covered:           {min(years)}–{max(years)}")
     print(f"  Mean extraction conf.:   {stats['mean_extraction_confidence']:.3f}")
