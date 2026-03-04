@@ -48,17 +48,15 @@ Form A Part 1 facility entries use numbered fields:
 
 Multiple facilities appear sequentially, each restarting at field 1.
 
-Primary PDF source: bwcimplementation.org (static URLs, no JS rendering)
-Secondary source: bwc-cbm.un.org (JS-rendered, needs Playwright — Phase 2)
-
-Example PDF URLs:
-- https://bwcimplementation.org/sites/default/files/resource/US_CBM_2023.pdf
-- https://bwcimplementation.org/sites/default/files/resource/bwc_cbm_2010_sweden.pdf
-- https://bwcimplementation.org/sites/default/files/resource/bwc_cbm_2018_japan.pdf
+Primary PDF source: bwc-cbm.un.org — public JSON search API (no auth required)
+  - Enumerate: POST https://bwc-cbm.un.org/api/search/ with {from, size, search:"", filter:{country:[]}}
+  - Download: POST https://cms-bwc-cbm.un.org/api/getDocument with {reportId: <int>, language: null}
+  - 517 public records available; China/France/Russia/India absent (restricted, not a pipeline failure)
+  - bwcimplementation.org now returns empty HTML (fully JS-rendered) — no longer usable
 
 ## Development approach
-Build and validate one script at a time, sequentially (01 through 05).
-Each script reads from the previous script's output directory.
-Start with English-language born-digital PDFs only.
+All 517 publicly available CBM submissions downloaded and processed.
+Scripts process all languages (en, fr, es, ru) with Claude-side translation for non-English.
+Form A Part 1 (research facilities) and Form G (vaccine facilities) both extracted.
 Use Claude Sonnet API (claude-sonnet-4-20250514) for extraction calls.
 Load API key from .env using python-dotenv.
