@@ -1,9 +1,11 @@
 # BWC Confidence-Building Measures Structured Database Tool
 ## Technical Architecture Document
 
-**Version:** 0.1 (Scoping)  
-**Date:** March 2026  
+**Version:** 0.2
+**Date:** March 2026
 **Classification:** Unclassified — for internal planning
+
+> **Status note (v0.2):** The extraction pipeline (scripts 01–05) is substantially complete. This document has been updated to reflect what was actually built and to reframe the development phases around remaining work: additional form extraction, database ingestion, and the web interface.
 
 ---
 
@@ -24,12 +26,20 @@ These submissions exist as unstructured documents—PDFs, scanned papers, and Wo
 **URL:** `https://bwc-cbm.un.org` (public interface); `https://bwc-ecbm.unog.ch` (submission portal, restricted)
 
 **Access tiers:**
-- **Public:** States parties may opt to make their CBMs publicly accessible. Publicly available submissions are downloadable as PDFs from `bwc-cbm.un.org` by clicking the country name on the annual statistics page. No authentication required.
+- **Public:** States parties may opt to make their CBMs publicly accessible. No authentication required for public submissions.
 - **States Parties only:** Some submissions are restricted to credentialled states party representatives. These are inaccessible for this project without governmental cooperation.
 
-**Coverage:** All CBMs received since 1987 are on the platform. However, early submissions (1987–~2005) are predominantly scanned paper documents. Post-2006 submissions are increasingly born-digital (Word/PDF). Post-2018 submissions may use the e-CBM platform's structured online entry, though many states still submit standalone PDFs.
+**Coverage:** All CBMs received since 1987 are on the platform. Early submissions (1987–~2005) are predominantly scanned paper documents. Post-2006 submissions are increasingly born-digital (Word/PDF). Post-2018 submissions may use the e-CBM platform's structured online entry, though many states still submit standalone PDFs.
 
-**Public availability fraction:** Varies by year. The Hamburg 2023 Reader notes that the number of states making CBMs publicly available is volatile—many states oscillate between public and restricted without explanation. Based on available data, roughly 40–60% of annual submissions are publicly accessible in any given year. For high-submitting states (US, UK, Germany, Canada, Netherlands, Sweden, Finland, Norway, Australia), public availability is relatively consistent.
+**Public availability fraction:** Varies by year. The Hamburg 2023 Reader notes that the number of states making CBMs publicly available is volatile. For high-submitting states (US, UK, Germany, Canada, Netherlands, Sweden, Finland, Norway, Australia), public availability is relatively consistent.
+
+**Actual public corpus (as of March 2026):** 517 publicly available submissions were enumerated and downloaded. This is smaller than the initial 1,500–2,500 estimate, which incorrectly assumed per-form separate files; in practice each state submits one consolidated document per year. Notable absences: China, France, Russia, and India do not make their CBMs publicly accessible.
+
+**API access (implemented):** The e-CBM platform exposes a public JSON search API that was used for acquisition — no scraping of HTML was required:
+- Enumerate: `POST https://bwc-cbm.un.org/api/search/` with `{"from": N, "size": 50, "search": "", "filter": {"country": []}}`
+- Download: `POST https://cms-bwc-cbm.un.org/api/getDocument` with `{"reportId": <int>, "language": null}`
+
+`language: null` returns the original-language PDF; passing an ISO language code returns a machine-translated version (not used — we translate during extraction via Claude instead).
 
 ### 2.2 Secondary Sources (for enrichment, not core extraction)
 
@@ -43,11 +53,9 @@ These submissions exist as unstructured documents—PDFs, scanned papers, and Wo
 
 ### 2.3 Access Strategy
 
-**Phase 1 (MVP):** Work exclusively with publicly available CBM PDFs downloadable from `bwc-cbm.un.org`. Build a scraper to systematically catalogue and download all publicly accessible submissions. Scope: estimated 1,500–2,500 documents across all years and states.
+**Public corpus (complete):** All 517 publicly available submissions have been downloaded, catalogued, and processed through the full extraction pipeline. This covers all years (1988–2026), all publicly accessible states (45 countries in the structured output), and all four languages present in the public corpus: English, French, Spanish, and Russian. Arabic and Chinese would require additional OCR tooling, but neither language appears in the public corpus — the states that submit in those languages (principally China) do not make their CBMs public.
 
-**Phase 2 (Partnership):** Approach the ISU to discuss formal cooperation. The December 2025 US State Department speech explicitly endorsing AI for CBM analysis creates a political opening. The ISU would likely welcome a tool that reduces burden on states parties, particularly if framed as supporting the Working Group on Strengthening the Convention (2023–2026 mandate). ISU cooperation would unlock the full corpus including restricted submissions.
-
-**Phase 3 (Integration):** If ISU partnership is established, explore integration as an analytical layer on top of the e-CBM platform itself, with the ISU's endorsement.
+**ISU partnership (next priority for access):** Formal cooperation with the ISU remains the key to unlocking restricted submissions. The December 2025 US State Department speech explicitly endorsing AI for CBM analysis creates a political opening. ISU cooperation would unlock the full corpus including restricted submissions, and would give the tool an authoritative institutional home. This is Phase 3 in the revised roadmap below.
 
 ---
 
@@ -116,6 +124,8 @@ The current CBM forms (revised at the Seventh Review Conference, 2011) comprise:
 | 2006–2017 | Mixed born-digital PDF and scans | Partial | All 6 UN languages |
 | 2018–present | Born-digital PDF, Word, or e-CBM online entry | Rarely | All 6 UN languages |
 
+**Actual OCR experience:** Of the 517 public submissions, only 8 required Tesseract OCR (avg chars/page < 100 threshold). LLM post-OCR correction (Claude Sonnet, one call per page) was applied to all 8; this revealed form A Part 1 content in 3 documents that Tesseract alone had rendered unreadable. Arabic and Chinese are absent from the public corpus. Pre-1995 scanned documents from certain states (e.g., Germany 1988–1990) are so severely degraded that regex-based form segmentation is not feasible; LLM segmentation is used as fallback for these 3 documents.
+
 ### 3.3 Form Version Discontinuities
 
 Critical consideration: CBM form structure changed at the Third Review Conference (1991, major expansion) and the Seventh Review Conference (2011, revised forms, deletion of Form D). Any schema must accommodate three form eras:
@@ -133,148 +143,83 @@ The extraction schema should be designed around Era 3 as the canonical structure
 ### 4.1 Architecture Overview
 
 ```
-[Document Acquisition] → [Classification] → [OCR/Text Extraction] → [LLM Structured Extraction] → [Validation] → [Database Ingestion] → [Query Interface]
+[Document Acquisition] → [Text Extraction + OCR] → [Form Segmentation] → [LLM Structured Extraction] → [Assembly + Entity Resolution] → [Database Ingestion] → [Query Interface]
 ```
 
-### 4.2 Stage 1: Document Acquisition
+Stages 1–5 are implemented as scripts 01–05 and are complete for Forms A Part 1 and G across the full public corpus. Stages 6–7 (database and query interface) are the primary remaining engineering work.
 
-**Tool:** Custom Python scraper using `requests` + `BeautifulSoup`
+### 4.2 Stage 1: Document Acquisition (script 01 — complete)
+
+**Tool:** `requests` + UN e-CBM JSON API (not HTML scraping — the public-facing site is fully JS-rendered)
 
 **Process:**
-1. Scrape `bwc-cbm.un.org` statistics pages for all years
-2. Identify publicly available submissions (clickable country names)
-3. Download all available PDFs
-4. Catalogue: assign unique identifier per document (`{country_iso3}_{year}_{form}.pdf`)
-5. Store raw documents in cloud storage (S3 or equivalent)
-6. Build metadata index: country, year, file size, page count, detected language (preliminary)
+1. Enumerate all publicly available submissions via `POST bwc-cbm.un.org/api/search/`
+2. Download each PDF via `POST cms-bwc-cbm.un.org/api/getDocument` with `language: null` (original language)
+3. Assign unique identifiers (`{ISO3}_{year}.pdf`), deduplicate amendments with `_2`, `_3` suffixes
+4. Build `data/catalogue.json` — one entry per document with country, year, language, file size, download status
 
-**Output:** Raw document corpus + metadata index (JSON/CSV)
+**Output:** 517 PDFs in `data/raw_pdfs/`; `data/catalogue.json`
 
-**Estimated corpus size:** ~1,500–2,500 PDFs. At typical 10–200 pages each, total page count likely 20,000–80,000 pages. The US submissions alone run to ~190 pages/year.
+### 4.3 Stage 2: Text Extraction and OCR (script 02 — complete)
 
-### 4.3 Stage 2: Document Classification
-
-**Purpose:** Determine per document: (a) which CBM forms are present, (b) language, (c) form era, (d) whether content is substantive or "nothing to declare".
-
-**Tool:** LLM classification (Claude Sonnet via API) on first 2–3 pages + table of contents where present.
-
-**Process:**
-1. Extract first 3 pages of text (OCR if necessary — see Stage 3)
-2. Submit to LLM with classification prompt:
-   - Identify language(s) present
-   - Identify which CBM forms are included
-   - Classify form era (pre-1992, 1992–2011, post-2011)
-   - Flag "nothing to declare"/"nothing new to declare" forms
-3. Store classification metadata
-
-**Fallback:** For documents where first pages are uninformative (e.g., cover letters only), expand to full document scan.
-
-### 4.4 Stage 3: OCR and Text Extraction
-
-**Decision tree:**
+**Decision tree (implemented):**
 
 ```
-Is document born-digital (text-selectable PDF)?
-├── YES → Extract text directly (PyMuPDF / pdfplumber)
-└── NO → Is document in Latin script?
-    ├── YES → Tesseract OCR (high confidence for EN/FR/ES)
-    └── NO → Is document in Cyrillic?
-        ├── YES → Tesseract OCR with rus/ukr language packs
-        └── NO → Is document in Arabic or Chinese?
-            └── YES → Cloud Vision API (Google) or Azure Document Intelligence
-                       (superior CJK and Arabic performance)
+Is avg text density ≥ 100 chars/page?
+├── YES → pdfplumber extraction (with TSV table blocks where tables detected)
+└── NO → Tesseract OCR (language-appropriate pack: eng/fra/spa/rus/ukr/...)
+         └── Claude Sonnet post-correction (one API call per page)
+             Corrects misread characters and OCR artifacts while
+             preserving original language
 ```
 
-**Tools:**
-- **Born-digital extraction:** `PyMuPDF` (fitz) or `pdfplumber` (Python). Preference for `pdfplumber` for table extraction.
-- **Latin/Cyrillic OCR:** Tesseract 5.x with appropriate language packs. Adequate for post-2000 scanned documents. For pre-1995 poor-quality scans, consider Google Cloud Vision API.
-- **Arabic/Chinese OCR:** Google Cloud Vision API or Azure AI Document Intelligence. Tesseract's CJK and Arabic performance is insufficient for this use case.
-- **Table extraction:** `pdfplumber` for born-digital; Camelot or `img2table` for scanned documents. Form A Part 1 and Form G are substantially tabular.
+**Notes:**
+- `pdfplumber` is preferred over PyMuPDF for its superior table extraction (TSV `[TABLE]...[/TABLE]` blocks)
+- Arabic/Chinese OCR (Google Cloud Vision) is plumbed but not exercised — neither language appears in the public corpus
+- LLM post-correction was the decisive factor for 3 documents (Uganda, Côte d'Ivoire, Croatia, Bolivia among others) where raw Tesseract output was unreadable to downstream scripts
+- 8 of 517 documents required OCR; all 8 were LLM-corrected
 
-**LLM post-correction:** After OCR, submit extracted text to Claude with the prompt: "This is OCR output from a BWC Confidence-Building Measure submission in [language]. Correct any obvious OCR errors, preserving the original language. Flag low-confidence sections." This is particularly valuable for older scanned documents where OCR confidence is low.
+**Output:** `data/extracted_text/{id}.txt` and `{id}_pages.json` per document
 
-**Output:** Clean text per document, segmented by form where possible, with language tags and OCR confidence metadata.
+### 4.4 Stage 3: Form Segmentation (script 03 — complete)
 
-### 4.5 Stage 4: LLM-Powered Structured Extraction
+**Purpose:** Split each document's text into per-form files (form_a1.txt, form_b.txt, etc.) for targeted extraction.
+
+**Method:**
+- **Primary (98.4% of documents):** Regex matching against the first 5 non-empty lines of each page. Patterns cover all 6 UN languages for forms A1, A2, B, C, E, F, G and Form 0, including pre-2011 descriptive headers, French guillemet variants, Cyrillic headers, numbered-list format (pre-2011 Norwegian style), and the short "Measure X" format
+- **Fallback (1.6% of documents):** Claude Sonnet classifies form boundaries from a compact page index (first 200 chars/page). Used for documents where OCR corruption or pre-template structure defeats regex
+
+**Output:** `data/segmented/{id}/` with per-form text files and `manifest.json`
+
+### 4.5 Stage 4: LLM-Powered Structured Extraction (script 04 — complete for Forms A1 and G)
 
 **This is the core value-add of the tool.**
 
-**Approach:** Form-specific extraction prompts submitted to Claude Sonnet API with structured JSON output.
+**Implemented forms:**
+- **Form A Part 1** (research facilities): 7-field extraction schema per facility, with automatic translation for non-English submissions. Text is chunked at 4,000 chars, split at facility boundaries. 1,553 facility-year records extracted.
+- **Form G** (vaccine production facilities): 3-field extraction schema. 599 vaccine facility-year records extracted.
 
-**Process per form:**
+**Not yet extracted:** Forms A Part 2 (biodefence programmes), B (outbreaks), E (legislation), F (historical programmes). These are segmented and ready; extraction prompts and schemas remain to be written.
 
-1. Segment document text by CBM form (using form headers/numbers as delimiters)
-2. For each form section, submit to LLM with:
-   - The target extraction schema (JSON schema)
-   - The template form in the detected language (as reference for field mapping)
-   - The extracted text
-   - Instruction to extract all structured fields, translating to English where the source is non-English
-3. Parse returned JSON
-4. Run validation checks (see Stage 5)
+**Language handling:** All four languages in the public corpus (EN, FR, ES, RU) are processed without a language filter. Claude translates to English during extraction while preserving original-language names in a parallel field. This simultaneous translation-and-extraction approach was the design decision that made multilingual processing tractable without separate translation infrastructure.
 
-**Example extraction prompt (Form A, Part 1):**
+**JSON recovery:** Four-strategy parse cascade handles malformed Claude output, including a specific fix for the doubled-closing-quote bug (U+201D followed by ASCII `"`) that appears when source text ends with a curly quotation mark.
 
-```
-You are extracting structured data from a BWC Confidence-Building 
-Measure submission (Form A, Part 1: Research Centres and Laboratories).
+**Output:** `data/structured/{id}_form_a1.json` and `{id}_form_g.json` per document
 
-Extract ALL facilities listed, returning a JSON array. For each 
-facility, extract:
-{
-  "facility_name": string,
-  "facility_name_original": string (if non-English, preserve original),
-  "responsible_organisation": string,
-  "location": {
-    "address": string,
-    "city": string,
-    "country": string (ISO 3166-1 alpha-3)
-  },
-  "funding_source": string,
-  "personnel": {
-    "total": integer or null,
-    "phd_level": integer or null,
-    "support": integer or null
-  },
-  "floor_area_m2": {
-    "bsl2": number or null,
-    "bsl3": number or null,
-    "bsl4": number or null,
-    "total": number or null
-  },
-  "agents_worked_with": [string] or "redacted" or "not declared",
-  "additional_notes": string or null
-}
+### 4.6 Stage 5: Assembly, Entity Resolution, and Output (script 05 — complete)
 
-If a field is not present in the source, use null. If information is 
-ambiguous, extract your best interpretation and flag in additional_notes.
+**Entity resolution:** Union-Find within each country, matching on facility names using RapidFuzz `token_sort_ratio ≥ 85`. Produces 410 canonical facility entities across 45 countries.
 
-Source text follows:
----
-[EXTRACTED TEXT]
-```
+**Output files:**
+- `data/output/all_facilities.csv` / `.json` — 1,553 Form A Part 1 facility-year records
+- `data/output/all_vaccine_facilities.csv` / `.json` — 599 Form G vaccine facility-year records
+- `data/output/entity_registry.json` — 410 canonical facility entities
+- `data/output/summary_stats.json` — aggregate statistics
 
-**Language handling:** The prompt instructs translation to English for standardised fields (facility name, location, agents) while preserving originals. For non-English submissions, the LLM performs simultaneous translation and extraction — this is the key capability that makes the tool feasible where it previously was not.
+**Validation (implemented so far):** LLM-assigned confidence scores (mean 0.871); provenance tracking (source document ID on every record). Cross-field and temporal consistency checks (Stage 5 in the original plan) remain to be implemented formally, though the entity registry already surfaces year-on-year inconsistencies implicitly.
 
-**Cost estimation:** At ~$3/MTok input, $15/MTok output for Claude Sonnet, processing 50,000 pages at ~500 tokens/page = 25M input tokens ≈ $75 input. Structured output likely 2–5M tokens ≈ $30–75. Total API cost for full corpus extraction: **~$100–200.** Very modest. The expensive part is human validation, not compute.
-
-### 4.6 Stage 5: Validation
-
-**Automated validation:**
-1. **Schema validation:** Does the returned JSON conform to the target schema? (JSON Schema validation)
-2. **Cross-field consistency:** Do personnel totals sum correctly? Is BSL-4 floor area ≤ total floor area?
-3. **Temporal consistency:** For facilities appearing in consecutive years, flag dramatic changes (e.g., BSL-4 area doubling year-on-year) for human review
-4. **Entity resolution:** Fuzzy-match facility names across years and across states' submissions to build a canonical facility registry. LLM-assisted: "Are 'Swedish Defence Research Agency (FOI)' and 'Totalförsvarets forskningsinstitut (FOI)' the same entity?" → Yes, confidence 0.99
-5. **Completeness scoring:** Per submission, what fraction of expected fields were populated vs. null?
-
-**Human-in-the-loop validation:**
-- For Phase 1/MVP, manually validate a random 10% sample of extractions against source PDFs
-- Calculate per-field extraction accuracy
-- Identify systematic error patterns (e.g., misattribution of BSL levels, confusion between m² and ft²)
-- Iterate extraction prompts based on error analysis
-
-**Output:** Validated structured records with per-field confidence scores and provenance links back to source page numbers.
-
-### 4.7 Stage 6: Database Ingestion
+### 4.7 Stage 6: Database Ingestion (planned)
 
 **Database:** PostgreSQL with PostGIS extension (for facility geolocation).
 
@@ -401,89 +346,106 @@ form_zero_declarations
 
 ## 6. Technology Stack
 
-| Component | Technology | Rationale |
-|---|---|---|
-| Scraping/acquisition | Python (requests, BeautifulSoup) | Standard, reliable |
-| OCR (Latin/Cyrillic) | Tesseract 5.x | Open source, sufficient for most documents |
-| OCR (Arabic/Chinese) | Google Cloud Vision API | Superior CJK/Arabic performance |
-| Text extraction (born-digital) | pdfplumber, PyMuPDF | Best-in-class PDF text/table extraction |
-| LLM extraction | Claude Sonnet API | Cost-effective structured extraction with strong multilingual capability |
-| LLM post-OCR correction | Claude Sonnet API | Same pipeline |
-| Entity resolution | Claude Sonnet API + fuzzy matching (RapidFuzz) | LLM for semantic matching; algorithmic for scale |
-| Database | PostgreSQL + PostGIS | Robust, geospatial-capable, open source |
-| API layer | FastAPI (Python) | Lightweight, fast, auto-documented |
-| Frontend | React + Leaflet/Mapbox | Standard for geospatial web dashboards |
-| Geocoding | Nominatim (OSM) or Google Geocoding API | Facility address → coordinates |
-| Hosting | AWS (EC2/RDS) or equivalent | Scalable, affordable for this data volume |
-| CI/CD | GitHub Actions | Standard |
-| Orchestration | Prefect or Airflow (lightweight) | For annual pipeline re-runs |
+| Component | Technology | Status | Rationale |
+|---|---|---|---|
+| Acquisition | Python + UN e-CBM JSON API | **Implemented** | Direct API access; scraping not viable (site is JS-rendered) |
+| OCR (Latin/Cyrillic) | Tesseract 5.x | **Implemented** | Open source, sufficient for the 8 documents that required it |
+| OCR (Arabic/Chinese) | Google Cloud Vision API | Plumbed, not exercised | Neither language present in public corpus |
+| Text extraction (born-digital) | pdfplumber | **Implemented** | Superior table extraction vs. PyMuPDF; TSV table blocks |
+| LLM post-OCR correction | Claude Sonnet API | **Implemented** | Page-level correction; decisive for 3 previously unreadable docs |
+| Form segmentation | Regex + Claude Sonnet fallback | **Implemented** | 98.4% regex; LLM for 8 edge-case documents |
+| LLM structured extraction | Claude Sonnet API | **Implemented (A1, G)** | Simultaneous extraction + translation; Forms A2/B/E/F pending |
+| Entity resolution | RapidFuzz (token_sort_ratio ≥ 85) | **Implemented** | Algorithmic within-country matching; 410 canonical facilities |
+| Flat-file output | CSV + JSON | **Implemented** | Interim output format pending database ingestion |
+| Database | PostgreSQL + PostGIS | **Planned (Phase 2)** | Robust, geospatial-capable, open source |
+| Geocoding | Nominatim (OSM) / Google Geocoding API | **Planned (Phase 2)** | Facility address → coordinates for map visualisation |
+| API layer | FastAPI (Python) | **Planned (Phase 3)** | Lightweight, fast, auto-documented |
+| Frontend | React + Leaflet/Mapbox | **Planned (Phase 3)** | Standard for geospatial web dashboards |
+| Hosting | AWS (EC2/RDS) or equivalent | **Planned (Phase 3)** | Scalable, affordable for this data volume |
+| CI/CD | GitHub Actions | **Planned (Phase 3)** | Standard |
+| Orchestration | Prefect or Airflow (lightweight) | **Planned (Phase 3)** | For annual pipeline re-runs |
 
 ---
 
-## 7. Development Phases and Timeline
+## 7. Development Phases
 
-### Phase 1: MVP (Weeks 1–6)
+The original phased plan—English first, then multilingual; post-2011 first, then historical—was abandoned in practice. The extraction pipeline was built to handle all languages, all eras, and all publicly available documents in a single pass. Phases are now organised around what remains to be built on top of the completed extraction layer.
 
-**Scope:** Forms A (Part 1) and G only. English-language public submissions only. 2012–present (post-revision forms only).
+### Phase 1: Extraction Pipeline — COMPLETE
 
-**Deliverables:**
-- Document scraper and catalogue
-- Extraction pipeline for Forms A1 and G
-- PostgreSQL database with validated data
-- Basic web dashboard with facility map and country profiles
-- Validation report (accuracy metrics on 10% sample)
+**What was built:**
+- Full acquisition of all 517 publicly available CBM submissions via the UN e-CBM API
+- Text extraction pipeline: pdfplumber for born-digital PDFs, Tesseract + LLM correction for scanned documents
+- Form segmentation across all form types, all languages (EN, FR, ES, RU), and all eras (1988–2026), with regex primary method (98.4%) and LLM fallback
+- Structured extraction for **Form A Part 1** (research facilities) and **Form G** (vaccine production facilities) across the complete corpus in all four languages, with simultaneous translation for non-English submissions
+- Entity resolution: canonical facility registry with fuzzy name matching
+- Flat-file outputs: CSV and JSON for all extracted data
 
-**Estimated corpus:** ~400–600 documents (English public submissions, 2012–2024, ~50 states/year at ~50% public availability, but many are single-country multi-form documents).
+**Current dataset (March 2026):**
+- 1,553 Form A Part 1 facility-year records, 410 unique facilities, 45 countries, 1988–2026
+- 599 Form G vaccine facility-year records
+- Mean extraction confidence: 0.871
 
-### Phase 2: Multilingual Expansion (Weeks 7–12)
+### Phase 2: Complete Form Extraction and Database Ingestion — NEXT
 
-**Scope:** Extend to all 6 UN languages. Add Forms A (Part 2), E, and Form 0.
-
-**Deliverables:**
-- Multilingual OCR pipeline
-- Translation-integrated extraction
-- Biodefence programme database (Form A Part 2)
-- Legislation database (Form E)
-- Submission compliance dashboard (Form 0 data)
-- Entity resolution across languages
-
-### Phase 3: Historical Corpus (Weeks 13–20)
-
-**Scope:** Extend to 1987–2011 submissions. Handle form version discontinuities.
+**Scope:** Extract remaining forms from already-segmented text; ingest all structured data into PostgreSQL; add geocoding.
 
 **Deliverables:**
-- OCR pipeline for older scanned documents
-- Era 1 and Era 2 form mapping logic
-- Complete longitudinal database (1987–present)
-- Longitudinal analysis dashboard
-- Form B (outbreaks) and Form F (historical programmes) extraction
 
-### Phase 4: Partnership and Deployment (Weeks 20+)
+*Form extraction (building on existing script 04 infrastructure):*
+- **Form A Part 2** (biodefence programmes) — structured extraction of programme descriptions, responsible agencies, funding; adds the biodefence dimension alongside the facility dimension
+- **Form B** (outbreaks) — free-text extraction with structured fields for pathogen, location, date, and scale; analytically valuable for biosurveillance context
+- **Form E** (legislation) — extraction of national implementing legislation references; complements the VERTIC NIM database with self-reported state data
+- **Form F** (historical offensive programmes) — low yield (few substantive submissions) but high policy salience; extract where declared
+- **Form 0 compliance tracking** — extract declaration status per form per year to build a submission compliance matrix across all states and years
 
-**Scope:** ISU engagement, restricted corpus access, production deployment.
+*Infrastructure:*
+- PostgreSQL + PostGIS database (schema defined in Section 4.7)
+- Geocoding of facility addresses via Nominatim (OSM) with Google Geocoding API fallback
+- Formal cross-field validation: personnel totals, BSL area consistency, year-on-year change flags
+- Human validation of a 10% random sample; per-field accuracy report
+
+### Phase 3: Web Interface and Annual Automation
+
+**Scope:** Build the analyst-facing query interface; automate annual updates.
 
 **Deliverables:**
-- Formal cooperation agreement with ISU
-- Processing of restricted submissions (if access granted)
-- Production web deployment
-- Annual automated ingestion pipeline for new CBM submissions
-- Public launch, ideally timed for BWC Working Group session or Tenth Review Conference preparation
+- REST API (FastAPI) over the PostgreSQL database with endpoints for facilities, submissions, compliance, and statistics
+- Web dashboard (React + Leaflet/Mapbox):
+  - Global map of declared facilities, colour-coded by containment level
+  - Country profiles: submission history, completeness, facilities timeline
+  - Longitudinal view: how declared BSL-3/4 capacity and vaccine production has changed over time
+  - Submission compliance tracker: which states submitted which forms in which years
+  - Full-text search across structured and unstructured fields
+- Annual update pipeline: automated ingestion of new CBM submissions (expected each spring following the BWC inter-sessional meeting)
+- Data export in CSV, JSON, and GeoJSON formats
+
+### Phase 4: ISU Partnership and Restricted Corpus
+
+**Scope:** Formal engagement with the BWC Implementation Support Unit; processing of restricted submissions if access is granted; production deployment.
+
+**Deliverables:**
+- Formal cooperation agreement with the ISU
+- Processing of restricted CBM submissions (those not publicly available, representing ~50% of all annual submissions)
+- Production deployment with appropriate security for any restricted data
+- Annual automated ingestion aligned with ISU workflow
+- Public launch, ideally timed for a BWC Working Group session or as a contribution to Tenth Review Conference (2027) preparation
 
 ---
 
 ## 8. Risks and Mitigations
 
 ### 8.1 Data Access
-**Risk:** Publicly available CBMs may be an unrepresentative subset (states that are more transparent are also more likely to be compliant).  
-**Mitigation:** Acknowledged limitation. Phase 2 ISU partnership addresses this. The public subset still has substantial analytical value — it includes all major Western states plus many others.
+**Risk:** Publicly available CBMs may be an unrepresentative subset (states that are more transparent are also more likely to be compliant).
+**Mitigation:** Acknowledged limitation. Phase 4 ISU partnership addresses this for the restricted corpus. The public subset still has substantial analytical value — it covers all major Western states, the full 1988–2026 longitudinal record, and 45 countries.
 
 ### 8.2 Extraction Accuracy
-**Risk:** LLM extraction introduces errors, particularly for ambiguous or poorly structured submissions.  
-**Mitigation:** Per-field confidence scoring, human-in-the-loop validation on sample, provenance links to source pages. Users can always access the underlying PDF.
+**Risk:** LLM extraction introduces errors, particularly for ambiguous or poorly structured submissions.
+**Mitigation:** Per-field confidence scores are already assigned at extraction time (mean 0.871 across the corpus). Source document provenance is recorded on every record. Formal human-in-the-loop validation of a 10% random sample is planned for Phase 2, along with cross-field consistency checks. Users can always access the underlying PDF.
 
 ### 8.3 Political Sensitivity
-**Risk:** Some states may object to systematic analysis of their declarations, particularly if discrepancies with other sources are identified.  
-**Mitigation:** Phase 1 focuses purely on structuring declared data, NOT on discrepancy detection or compliance assessment. The tool is framed as supporting transparency and reducing burden — consistent with the Working Group mandate. Avoid naming and shaming. Present data neutrally.
+**Risk:** Some states may object to systematic analysis of their declarations, particularly if discrepancies with other sources are identified.
+**Mitigation:** The tool structures declared data only — it does not perform discrepancy detection or compliance assessment. It is framed as supporting transparency and reducing burden on states parties, consistent with the Working Group on Strengthening the Convention mandate. Data is presented neutrally. This framing should be maintained consistently in stakeholder communications.
 
 ### 8.4 Form Heterogeneity
 **Risk:** States interpret form fields inconsistently (e.g., some declare all BSL-2 labs, others only BSL-3+; some list specific agents, others redact).  
@@ -504,7 +466,7 @@ The December 2025 State Department speech articulated a vision for AI-assisted C
 | AI to help states *complete* CBMs | AI to *analyse* completed CBMs |
 | Dashboards presenting CBM information | Yes — structured database + dashboard |
 | Increase quantity and quality of submissions | Indirectly — by demonstrating analytical value of data |
-| Flag problematic research via CBMs | Not in scope (Phase 1) |
+| Flag problematic research via CBMs | Not in scope (by design — see Section 8.3) |
 
 The tools are complementary: the State Department vision focuses on the *input* side (helping states submit better CBMs), while this tool focuses on the *output* side (making submitted CBMs analytically useful). A complete ecosystem would include both.
 
@@ -514,13 +476,13 @@ The tools are complementary: the State Department vision focuses on the *input* 
 
 | Stakeholder | Engagement | Timing |
 |---|---|---|
-| BWC ISU (Geneva) | Informal briefing → formal cooperation proposal | Phase 1 complete |
-| UK FCDO BWC delegation | Brief on tool, seek endorsement | Phase 1 |
-| US State Dept (ISN/CB) | Align with their AI-for-BWC initiative | Phase 2 |
-| Hamburg Research Group (ZNF) | Collaboration — they have deep domain knowledge | Phase 1 |
-| Johns Hopkins CHS (Shearer/Gronvall) | Academic collaboration, validation | Phase 2 |
-| VERTIC | Integration with NIM Database (legislation) | Phase 2 |
-| BWC Working Group | Present as contribution to transparency agenda | Phase 3–4 |
+| BWC ISU (Geneva) | Informal briefing → formal cooperation proposal | **Now** — extraction pipeline complete; Phase 4 targets formal access |
+| UK FCDO BWC delegation | Brief on tool, seek endorsement | **Now** |
+| Hamburg Research Group (ZNF) | Collaboration — they have deep domain knowledge and may wish to adopt or co-publish | **Now** |
+| US State Dept (ISN/CB) | Align with their AI-for-BWC initiative | Phase 3 (once web interface exists) |
+| Johns Hopkins CHS (Shearer/Gronvall) | Academic collaboration, validation | Phase 2–3 |
+| VERTIC | Integration with NIM Database (Form E / legislation data) | Phase 2 |
+| BWC Working Group | Present as contribution to transparency agenda | Phase 3 (once dashboard available) |
 | Tenth Review Conference (2027) | Launch complete tool as side event | Phase 4 |
 
 ---
