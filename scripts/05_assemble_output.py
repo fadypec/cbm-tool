@@ -13,6 +13,10 @@ Also reads data/structured/*_form_g.json (if present) and writes:
   data/output/all_vaccine_facilities.csv
   data/output/all_vaccine_facilities.json
 
+Reads data/segmented/*/manifest.json and writes:
+  data/output/compliance_matrix.csv   (one row per document, wide format)
+  data/output/form_compliance.csv     (one row per document × form, long format)
+
 Usage:
     python scripts/05_assemble_output.py
 """
@@ -39,11 +43,25 @@ log = logging.getLogger(__name__)
 
 PROJECT_ROOT   = Path(__file__).resolve().parent.parent
 STRUCTURED_DIR = PROJECT_ROOT / "data" / "structured"
+SEGMENTED_DIR  = PROJECT_ROOT / "data" / "segmented"
 OUTPUT_DIR     = PROJECT_ROOT / "data" / "output"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
 SIMILARITY_THRESHOLD = 85   # token_sort_ratio score to merge two facility names
+
+# Forms tracked in the compliance matrix (Form 0 is the cover page, not tracked)
+COMPLIANCE_FORMS = ["A1", "A2", "B", "C", "E", "F", "G"]
+
+CSV_FIELDS_COMPLIANCE_MATRIX = (
+    ["country_iso3", "year", "source_document"]
+    + [f"form_{f.lower()}" for f in COMPLIANCE_FORMS]
+    + ["forms_substantive_count", "forms_ntd_count", "forms_absent_count"]
+)
+
+CSV_FIELDS_FORM_COMPLIANCE = [
+    "country_iso3", "year", "source_document", "form", "status",
+]
 
 CSV_FIELDS = [
     "country_iso3", "year", "facility_name", "responsible_org",
@@ -83,13 +101,17 @@ class UnionFind:
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 
-def load_catalogue_index() -> dict[str, str]:
-    """Return {source_id: language} from catalogue.json."""
+def load_catalogue() -> list[dict]:
+    """Return the full catalogue list from catalogue.json."""
     cat_path = PROJECT_ROOT / "data" / "catalogue.json"
     if not cat_path.exists():
-        return {}
-    catalogue = json.loads(cat_path.read_text(encoding="utf-8"))
-    return {e["id"]: e.get("language", "en") for e in catalogue}
+        return []
+    return json.loads(cat_path.read_text(encoding="utf-8"))
+
+
+def load_catalogue_index() -> dict[str, str]:
+    """Return {source_id: language} from catalogue.json."""
+    return {e["id"]: e.get("language", "en") for e in load_catalogue()}
 
 
 def load_all_facilities() -> list[dict]:
@@ -108,6 +130,66 @@ def load_all_vaccine_facilities() -> list[dict]:
         data = json.loads(path.read_text(encoding="utf-8"))
         records.extend(data.get("vaccine_facilities", []))
     return records
+
+
+# ── Compliance data ───────────────────────────────────────────────────────────
+
+
+def load_compliance_data(catalogue: list[dict]) -> list[dict]:
+    """
+    Read segmentation manifests and compute per-form compliance status.
+
+    Returns a list of dicts, one per document, with keys:
+        country_iso3, year, source_document,
+        form_<f>  (for each f in COMPLIANCE_FORMS): "substantive" | "nothing_to_declare" | "absent"
+        forms_substantive_count, forms_ntd_count, forms_absent_count
+    """
+    # Build lookup: id → catalogue entry (for country, year, amendment flag)
+    cat_map = {e["id"]: e for e in catalogue}
+
+    rows: list[dict] = []
+    for manifest_path in sorted(SEGMENTED_DIR.glob("*/manifest.json")):
+        doc_id = manifest_path.parent.name
+        entry = cat_map.get(doc_id, {})
+
+        # Skip amendments and docs not in catalogue
+        if entry.get("is_amendment"):
+            continue
+        if not entry.get("downloaded"):
+            continue
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        present = set(manifest.get("forms_present", []))
+        ntd     = set(manifest.get("forms_nothing_to_declare", []))
+
+        row: dict = {
+            "country_iso3":    entry.get("country_iso3"),
+            "year":            entry.get("year"),
+            "source_document": doc_id,
+        }
+        substantive_count = 0
+        ntd_count         = 0
+        absent_count      = 0
+
+        for form in COMPLIANCE_FORMS:
+            if form not in present:
+                status = "absent"
+                absent_count += 1
+            elif form in ntd:
+                status = "nothing_to_declare"
+                ntd_count += 1
+            else:
+                status = "substantive"
+                substantive_count += 1
+            row[f"form_{form.lower()}"] = status
+
+        row["forms_substantive_count"] = substantive_count
+        row["forms_ntd_count"]         = ntd_count
+        row["forms_absent_count"]      = absent_count
+        rows.append(row)
+
+    rows.sort(key=lambda r: (r["country_iso3"] or "", r["year"] or 0))
+    return rows
 
 
 # ── Entity resolution ─────────────────────────────────────────────────────────
@@ -288,7 +370,10 @@ def build_entity_registry(
 
 
 def build_summary_stats(
-    flat: list[dict], registry: list[dict], vaccine_flat: list[dict] | None = None
+    flat: list[dict],
+    registry: list[dict],
+    vaccine_flat: list[dict] | None = None,
+    compliance: list[dict] | None = None,
 ) -> dict:
     """Compute dataset-level summary statistics."""
     confidences = [r["confidence"] for r in flat if r["confidence"] is not None]
@@ -322,6 +407,16 @@ def build_summary_stats(
         result["total_vaccine_facility_year_records"] = len(vaccine_flat)
         vc = sorted({r["country_iso3"] for r in vaccine_flat if r["country_iso3"]})
         result["vaccine_countries_covered"] = vc
+    if compliance is not None:
+        total_docs = len(compliance)
+        result["compliance_documents_tracked"] = total_docs
+        # Per-form substantive rate
+        form_rates: dict[str, float] = {}
+        for form in COMPLIANCE_FORMS:
+            col = f"form_{form.lower()}"
+            sub = sum(1 for r in compliance if r.get(col) == "substantive")
+            form_rates[form] = round(sub / total_docs, 3) if total_docs else 0.0
+        result["form_substantive_rate"] = form_rates
     return result
 
 
@@ -335,7 +430,8 @@ def main() -> None:
     records = load_all_facilities()
     log.info("Loaded %d facility-year records", len(records))
 
-    cat_index = load_catalogue_index()
+    catalogue = load_catalogue()
+    cat_index = {e["id"]: e.get("language", "en") for e in catalogue}
 
     log.info("Resolving entities (threshold=%d)…", SIMILARITY_THRESHOLD)
     id_map = resolve_entities(records)
@@ -393,8 +489,39 @@ def main() -> None:
     else:
         log.info("No Form G data found; skipping vaccine facility outputs")
 
+    # ── compliance matrix (Form 0 / segmentation manifests) ──────────────────
+    log.info("Loading compliance data from segmentation manifests …")
+    compliance = load_compliance_data(catalogue)
+    log.info("Loaded compliance data for %d documents", len(compliance))
+
+    comp_matrix_path = OUTPUT_DIR / "compliance_matrix.csv"
+    with comp_matrix_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS_COMPLIANCE_MATRIX)
+        writer.writeheader()
+        writer.writerows(compliance)
+    log.info("Wrote %s (%d rows)", comp_matrix_path, len(compliance))
+
+    # Long-format: one row per (document, form)
+    long_rows: list[dict] = []
+    for row in compliance:
+        for form in COMPLIANCE_FORMS:
+            long_rows.append({
+                "country_iso3":    row["country_iso3"],
+                "year":            row["year"],
+                "source_document": row["source_document"],
+                "form":            form,
+                "status":          row[f"form_{form.lower()}"],
+            })
+
+    form_comp_path = OUTPUT_DIR / "form_compliance.csv"
+    with form_comp_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS_FORM_COMPLIANCE)
+        writer.writeheader()
+        writer.writerows(long_rows)
+    log.info("Wrote %s (%d rows)", form_comp_path, len(long_rows))
+
     # ── summary_stats.json ────────────────────────────────────────────────────
-    stats = build_summary_stats(flat, registry, vaccine_flat)
+    stats = build_summary_stats(flat, registry, vaccine_flat, compliance)
     stats_path = OUTPUT_DIR / "summary_stats.json"
     stats_path.write_text(
         json.dumps(stats, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -425,6 +552,14 @@ def main() -> None:
         for country, n in sorted(bsl3.items(), key=lambda x: -x[1]):
             print(f"    {country}: {n}")
     print("─────────────────────────────────────────────────────────────\n")
+
+    if stats.get("form_substantive_rate"):
+        n = stats["compliance_documents_tracked"]
+        print(f"── Compliance (% of {n} docs with substantive submission) ──")
+        for form, rate in stats["form_substantive_rate"].items():
+            bar = "█" * round(rate * 20)
+            print(f"  Form {form:2s}  {rate*100:5.1f}%  {bar}")
+        print("─────────────────────────────────────────────────────────────\n")
 
 
 if __name__ == "__main__":
