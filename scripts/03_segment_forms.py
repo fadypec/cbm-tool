@@ -198,6 +198,16 @@ FORM_ANCHORS: list[tuple[str, re.Pattern]] = [
     ("E",  re.compile(r"^Measure\s*E\b", re.I)),
     ("F",  re.compile(r"^Measure\s*F\b", re.I)),
     ("G",  re.compile(r"^Measure\s*G\b", re.I)),
+
+    # ── Numbered-list format (NOR pre-2011 and similar) ───────────────────────
+    # "2. CONFIDENCE-BUILDING MEASURE "A":" — A1/A2 distinction handled by
+    # FORM_ANCHOR_PAIRS below; bare A header defaults to A1 as fallback.
+    ("A1", re.compile(rf"^\d+\.\s+CONFIDENCE[-\s]BUILDING\s+MEASURE\s*{_Q}?\s*A\s*{_Q}?", re.I)),
+    ("B",  re.compile(rf"^\d+\.\s+CONFIDENCE[-\s]BUILDING\s+MEASURE\s*{_Q}?\s*B\s*{_Q}?\b", re.I)),
+    ("C",  re.compile(rf"^\d+\.\s+CONFIDENCE[-\s]BUILDING\s+MEASURE\s*{_Q}?\s*C\s*{_Q}?\b", re.I)),
+    ("E",  re.compile(rf"^\d+\.\s+CONFIDENCE[-\s]BUILDING\s+MEASURE\s*{_Q}?\s*E\s*{_Q}?\b", re.I)),
+    ("F",  re.compile(rf"^\d+\.\s+CONFIDENCE[-\s]BUILDING\s+MEASURE\s*{_Q}?\s*F\s*{_Q}?\b", re.I)),
+    ("G",  re.compile(rf"^\d+\.\s+CONFIDENCE[-\s]BUILDING\s+MEASURE\s*{_Q}?\s*G\s*{_Q}?\b", re.I)),
 ]
 
 # ── Line-pair patterns ────────────────────────────────────────────────────────
@@ -219,6 +229,14 @@ FORM_ANCHOR_PAIRS: list[tuple[str, re.Pattern]] = [
         rf"Medida\s+de\s+fomento\s+de\s+la\s+confianza\s*{_Q}?\s*A\s*{_Q}?\s+Parte\s*1\b", re.I)),
     ("A2", re.compile(
         rf"Medida\s+de\s+fomento\s+de\s+la\s+confianza\s*{_Q}?\s*A\s*{_Q}?\s+Parte\s*2\b", re.I)),
+    # Numbered-list format: the A header and Part 1/2 may fall on consecutive lines
+    # (e.g. NOR pre-2011: line N = '2. CONFIDENCE-BUILDING MEASURE "A":'
+    #                      line N+1 = 'Part 1: Exchange of data on research centers')
+    # These override the bare A1 fallback in FORM_ANCHORS when Part 2 is present.
+    ("A2", re.compile(
+        rf"CONFIDENCE[-\s]BUILDING\s+MEASURE\s*{_Q}?\s*A\s*{_Q}?.*Part\s*2\b", re.I)),
+    ("A1", re.compile(
+        rf"CONFIDENCE[-\s]BUILDING\s+MEASURE\s*{_Q}?\s*A\s*{_Q}?.*Part\s*1\b", re.I)),
 ]
 
 # Nothing-to-declare phrases
@@ -255,16 +273,18 @@ def classify_page(page_text: str) -> str | None:
     adjacent line-pairs (catches documents where the form letter and part
     number fall on consecutive lines).
     """
-    lines = [l.strip() for l in page_text.split("\n") if l.strip()][:5]
+    lines = [l.strip() for l in page_text.split("\n") if l.strip()][:6]
 
-    # Pass 1: each of the first 3 lines against single-line patterns
-    for line in lines[:3]:
+    # Pass 1: check the first 5 non-empty lines against single-line patterns.
+    # 5 (not 3) because some pre-2011 formats (e.g. NOR) prepend a 4-line block
+    # of document reference / page number before the form identifier on line 5.
+    for line in lines[:5]:
         for form_key, pattern in FORM_ANCHORS:
             if pattern.match(line):
                 return form_key
 
-    # Pass 2: consecutive pairs against multi-line patterns
-    for i in range(min(3, len(lines) - 1)):
+    # Pass 2: consecutive pairs against multi-line patterns (up to pair 4+5)
+    for i in range(min(5, len(lines) - 1)):
         combined = lines[i] + " " + lines[i + 1]
         for form_key, pattern in FORM_ANCHOR_PAIRS:
             if pattern.search(combined):
