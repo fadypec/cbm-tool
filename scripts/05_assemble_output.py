@@ -13,6 +13,12 @@ Also reads data/structured/*_form_g.json (if present) and writes:
   data/output/all_vaccine_facilities.csv
   data/output/all_vaccine_facilities.json
 
+Also reads data/structured/*_form_f.json (if present) and writes:
+  data/output/past_programmes.csv
+
+Also reads data/structured/*_form_e.json (if present) and writes:
+  data/output/legislation.csv
+
 Reads data/segmented/*/manifest.json and writes:
   data/output/compliance_matrix.csv   (one row per document, wide format)
   data/output/form_compliance.csv     (one row per document × form, long format)
@@ -79,6 +85,23 @@ CSV_FIELDS_DEFENCE_FACILITIES = [
     "funding_research", "funding_development", "funding_te", "funding_currency",
     "work_description", "confidence", "translated", "source_document",
 ]
+
+CSV_FIELDS_PAST_PROGRAMMES = [
+    "country_iso3", "year", "convention_entry_date",
+    "has_offensive_programme", "offensive_period", "offensive_summary",
+    "has_defensive_programme", "defensive_period", "defensive_summary",
+    "translated", "confidence", "notes", "source_document",
+]
+
+_CATEGORIES = ["prohibitions", "exports", "imports", "biosafety"]
+_CAT_FIELDS  = ["legislation", "regulations", "other_measures", "amended"]
+
+CSV_FIELDS_LEGISLATION = (
+    ["country_iso3", "year"]
+    + [f"{cat}_{fld}" for cat in _CATEGORIES for fld in _CAT_FIELDS]
+    + ["key_laws", "translated", "confidence", "notes",
+       "input_truncated", "source_document"]
+)
 
 CSV_FIELDS = [
     "country_iso3", "year", "facility_name", "responsible_org",
@@ -222,6 +245,75 @@ def flatten_defence_facility(rec: dict) -> dict:
         "translated":         rec.get("translated"),
         "source_document":    meta.get("source_id"),
     }
+
+
+# ── Form F loaders ───────────────────────────────────────────────────────────
+
+
+def load_all_past_programmes() -> list[dict]:
+    """Return a flat list of all past-programme dicts from Form F JSONs."""
+    records: list[dict] = []
+    for path in sorted(STRUCTURED_DIR.glob("*_form_f.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        # Skip NTD / no_form stubs (no has_offensive_programme key)
+        if data.get("has_offensive_programme") is None and data.get("has_defensive_programme") is None:
+            continue
+        records.append(data)
+    return records
+
+
+def flatten_past_programme(rec: dict) -> dict:
+    """Flatten one Form F record into a CSV-ready dict."""
+    meta = rec.get("extraction_metadata", {}) or {}
+    return {
+        "country_iso3":            meta.get("country_iso3") or rec.get("country_iso3"),
+        "year":                    meta.get("year") or rec.get("year"),
+        "convention_entry_date":   rec.get("convention_entry_date"),
+        "has_offensive_programme": rec.get("has_offensive_programme"),
+        "offensive_period":        rec.get("offensive_period"),
+        "offensive_summary":       rec.get("offensive_summary"),
+        "has_defensive_programme": rec.get("has_defensive_programme"),
+        "defensive_period":        rec.get("defensive_period"),
+        "defensive_summary":       rec.get("defensive_summary"),
+        "translated":              rec.get("translated"),
+        "confidence":              rec.get("confidence"),
+        "notes":                   rec.get("notes"),
+        "source_document":         meta.get("source_id") or rec.get("id"),
+    }
+
+
+# ── Form E loaders ───────────────────────────────────────────────────────────
+
+
+def load_all_legislation() -> list[dict]:
+    """Return all Form E records from *_form_e.json files."""
+    records: list[dict] = []
+    for path in sorted(STRUCTURED_DIR.glob("*_form_e.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("categories") is not None:
+            records.append(data)
+    return records
+
+
+def flatten_legislation(rec: dict) -> dict:
+    """Flatten one Form E record into a CSV-ready dict."""
+    meta = rec.get("extraction_metadata", {}) or {}
+    cats = rec.get("categories") or {}
+    row: dict = {
+        "country_iso3": meta.get("country_iso3") or rec.get("country_iso3"),
+        "year":         meta.get("year") or rec.get("year"),
+    }
+    for cat in _CATEGORIES:
+        c = cats.get(cat) or {}
+        for fld in _CAT_FIELDS:
+            row[f"{cat}_{fld}"] = c.get(fld)
+    row["key_laws"]        = "; ".join(rec.get("key_laws") or [])
+    row["translated"]      = rec.get("translated")
+    row["confidence"]      = rec.get("confidence")
+    row["notes"]           = rec.get("notes")
+    row["input_truncated"] = rec.get("input_truncated", False)
+    row["source_document"] = meta.get("source_id") or rec.get("id")
+    return row
 
 
 # ── Compliance data ───────────────────────────────────────────────────────────
@@ -468,6 +560,8 @@ def build_summary_stats(
     compliance: list[dict] | None = None,
     defence_programmes_flat: list[dict] | None = None,
     defence_facilities_flat: list[dict] | None = None,
+    past_programmes_flat: list[dict] | None = None,
+    legislation_flat: list[dict] | None = None,
 ) -> dict:
     """Compute dataset-level summary statistics."""
     confidences = [r["confidence"] for r in flat if r["confidence"] is not None]
@@ -516,6 +610,16 @@ def build_summary_stats(
         result["defence_programme_countries"] = dc
     if defence_facilities_flat is not None:
         result["total_defence_facility_records"] = len(defence_facilities_flat)
+    if past_programmes_flat is not None:
+        result["total_past_programme_records"] = len(past_programmes_flat)
+        off = sum(1 for r in past_programmes_flat if r.get("has_offensive_programme"))
+        defn = sum(1 for r in past_programmes_flat if r.get("has_defensive_programme"))
+        result["past_programmes_with_offensive"] = off
+        result["past_programmes_with_defensive"] = defn
+    if legislation_flat is not None:
+        result["total_legislation_records"] = len(legislation_flat)
+        leg_c = sorted({r["country_iso3"] for r in legislation_flat if r["country_iso3"]})
+        result["legislation_countries"] = leg_c
     return result
 
 
@@ -616,6 +720,38 @@ def main() -> None:
         log.info("No Form A Part 2 data found; skipping defence programme outputs")
         dp_flat = df_flat = []
 
+    # ── Form F: past offensive/defensive programmes ───────────────────────────
+    past_programmes = load_all_past_programmes()
+    pp_flat: list[dict] = []
+    if past_programmes:
+        log.info("Loaded %d past-programme records (Form F)", len(past_programmes))
+        pp_flat = [flatten_past_programme(r) for r in past_programmes]
+        pp_flat.sort(key=lambda r: (r["country_iso3"] or "", r["year"] or 0))
+        pp_csv = OUTPUT_DIR / "past_programmes.csv"
+        with pp_csv.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS_PAST_PROGRAMMES)
+            writer.writeheader()
+            writer.writerows(pp_flat)
+        log.info("Wrote %s (%d rows)", pp_csv, len(pp_flat))
+    else:
+        log.info("No Form F data found; skipping past programme outputs")
+
+    # ── Form E: national biosafety/biosecurity legislation ────────────────────
+    legislation = load_all_legislation()
+    leg_flat: list[dict] = []
+    if legislation:
+        log.info("Loaded %d legislation records (Form E)", len(legislation))
+        leg_flat = [flatten_legislation(r) for r in legislation]
+        leg_flat.sort(key=lambda r: (r["country_iso3"] or "", r["year"] or 0))
+        leg_csv = OUTPUT_DIR / "legislation.csv"
+        with leg_csv.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS_LEGISLATION)
+            writer.writeheader()
+            writer.writerows(leg_flat)
+        log.info("Wrote %s (%d rows)", leg_csv, len(leg_flat))
+    else:
+        log.info("No Form E data found; skipping legislation output")
+
     # ── compliance matrix (Form 0 / segmentation manifests) ──────────────────
     log.info("Loading compliance data from segmentation manifests …")
     compliance = load_compliance_data(catalogue)
@@ -649,7 +785,8 @@ def main() -> None:
 
     # ── summary_stats.json ────────────────────────────────────────────────────
     stats = build_summary_stats(flat, registry, vaccine_flat, compliance,
-                               dp_flat or None, df_flat or None)
+                               dp_flat or None, df_flat or None,
+                               pp_flat or None, leg_flat or None)
     stats_path = OUTPUT_DIR / "summary_stats.json"
     stats_path.write_text(
         json.dumps(stats, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -670,6 +807,14 @@ def main() -> None:
         print(f"  Defence programme recs:  {stats['total_defence_programme_records']}")
     if stats.get("total_defence_facility_records"):
         print(f"  Defence facility recs:   {stats['total_defence_facility_records']}")
+    if stats.get("total_past_programme_records"):
+        off = stats.get("past_programmes_with_offensive", 0)
+        defn = stats.get("past_programmes_with_defensive", 0)
+        print(f"  Past programme recs:     {stats['total_past_programme_records']} "
+              f"({off} offensive / {defn} defensive)")
+    if stats.get("total_legislation_records"):
+        print(f"  Legislation recs (E):    {stats['total_legislation_records']} "
+              f"({len(stats.get('legislation_countries', []))} countries)")
     print(f"  Countries covered:       {len(stats['countries_covered'])}")
     print(f"  Years covered:           {min(years)}–{max(years)}")
     print(f"  Mean extraction conf.:   {stats['mean_extraction_confidence']:.3f}")

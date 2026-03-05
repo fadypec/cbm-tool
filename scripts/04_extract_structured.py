@@ -92,6 +92,12 @@ FORM_A2_FAC_FIELD5_MAX   = 1_500   # keep at most 1500 chars of field 5 work des
 
 PROGRESS_INTERVAL = 10             # emit a log.info progress line every N documents
 
+# Form E: national biosafety/biosecurity legislation
+# No truncation: the Yes/No table appears early, but many docs (e.g. IRL) use
+# "Yes/No" template text without typographic distinction — Claude needs the full
+# law listings to infer which option applies. Max doc is ~29KB, cost is trivial.
+FORM_E_MAX_CHARS = None            # no truncation
+
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
@@ -204,6 +210,107 @@ named products, set vaccines to [] and put the description in diseases_covered
 - Translation: if the document language is not English, translate field values to English. \
 Set translated=true. Preserve original in facility_name_original. \
 If already English, set translated=false\
+"""
+
+
+SYSTEM_PROMPT_F = """\
+You are extracting structured data from a BWC Confidence-Building Measure \
+submission (Form F: Declaration of Past Activities in Offensive and/or \
+Defensive Biological R&D Programmes).
+
+This form has three fields:
+1. Date of entry into force of the Convention for the State Party
+2. Past offensive biological R&D programme (yes/no, period, summary)
+3. Past defensive biological R&D programme (yes/no, period, summary)
+
+Return ONLY valid JSON, no preamble:
+{
+  "convention_entry_date": "YYYY-MM-DD or partial date string, or null",
+  "has_offensive_programme": true/false/null,
+  "offensive_period": "string describing the period(s) of activity, or null",
+  "offensive_summary": "brief summary of offensive activities, or null",
+  "has_defensive_programme": true/false/null,
+  "defensive_period": "string describing the period(s) of activity, or null",
+  "defensive_summary": "1-3 sentence summary of defensive programme, or null",
+  "translated": true/false,
+  "confidence": 0.0-1.0,
+  "notes": "any issues or observations, or null"
+}
+
+Rules:
+- has_offensive_programme / has_defensive_programme: true if the State Party \
+declares it conducted such a programme; false if explicitly no; null if unclear
+- "Nothing to declare" / "Rien à déclarer" / "Нет" → set both fields to false, \
+summaries to null
+- "Nothing new to declare" (USA offensive) → has_offensive_programme false, \
+summary "Nothing new to declare"
+- Summaries: keep brief (2-3 sentences max); omit publication lists and \
+lengthy historical narration
+- convention_entry_date: prefer ISO format; partial dates like "1975" are fine
+- Translation: if document language is not English, translate field values; \
+set translated=true\
+"""
+
+
+SYSTEM_PROMPT_E = """\
+You are extracting structured data from a BWC Confidence-Building Measure \
+submission (Form E: Declaration of Legislation, Regulations and Other Measures).
+
+Form E contains a table with four rows and four columns:
+  Rows (categories):
+    (a) Prohibitions — development, production, stockpiling, acquisition/retention \
+(Article I)
+    (b) Exports of micro-organisms and toxins
+    (c) Imports of micro-organisms and toxins
+    (d) Biosafety and biosecurity
+  Columns: Legislation | Regulations | Other measures | Amended since last year
+
+After the table, many submissions list specific laws by name.
+
+Return ONLY valid JSON, no preamble:
+{
+  "categories": {
+    "prohibitions": {
+      "legislation": true/false/null,
+      "regulations": true/false/null,
+      "other_measures": true/false/null,
+      "amended": true/false/null
+    },
+    "exports": {
+      "legislation": true/false/null,
+      "regulations": true/false/null,
+      "other_measures": true/false/null,
+      "amended": true/false/null
+    },
+    "imports": {
+      "legislation": true/false/null,
+      "regulations": true/false/null,
+      "other_measures": true/false/null,
+      "amended": true/false/null
+    },
+    "biosafety": {
+      "legislation": true/false/null,
+      "regulations": true/false/null,
+      "other_measures": true/false/null,
+      "amended": true/false/null
+    }
+  },
+  "key_laws": ["short name of law or regulation", ...],
+  "translated": true/false,
+  "confidence": 0.0-1.0,
+  "notes": "any issues or observations, or null"
+}
+
+Rules:
+- categories: read directly from the Yes/No table; use null if a cell is blank or \
+illegible
+- "Nothing to declare" → set all category fields to null, key_laws to []
+- key_laws: list the short names (e.g. "Penal Code Art. 140-1", \
+"Biosafety Act 2015") — omit URLs, omit the BWC itself
+- Keep key_laws to the most specific implementing legislation (max ~15 entries); \
+skip generic constitutional provisions unless they are the sole measure
+- Translation: if the document is not in English, translate all string values; \
+set translated=true\
 """
 
 
@@ -961,6 +1068,202 @@ def _write_output_a2(
     )
 
 
+# ── Form F extraction ────────────────────────────────────────────────────────
+
+
+def process_entry_f(
+    entry: dict,
+    client: anthropic.Anthropic,
+    last_t: list[float],
+) -> dict:
+    """Extract past programme declaration from Form F of one document."""
+    entry_id  = entry["id"]
+    form_path = SEGMENTED_DIR / entry_id / "form_f.txt"
+    out_path  = STRUCTURED_DIR / f"{entry_id}_form_f.json"
+
+    if not form_path.exists():
+        return {"id": entry_id, "status": "no_form_f"}
+
+    if out_path.exists():
+        return {"id": entry_id, "status": "skipped"}
+
+    text = form_path.read_text(encoding="utf-8").strip()
+    if not text:
+        _write_output_f(out_path, entry, {}, {"input_tokens": 0, "output_tokens": 0})
+        return {"id": entry_id, "status": "ok", "calls": 0,
+                "input_tokens": 0, "output_tokens": 0}
+
+    user_content = (
+        f"State Party: {entry['country']} ({entry['country_iso3']})\n"
+        f"Year: {entry['year']}\n"
+        f"Document language: {entry.get('language', 'en')}\n\n"
+        f"{text}"
+    )
+    messages: list[dict] = [{"role": "user", "content": user_content}]
+
+    resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_F)
+    raw  = resp.content[0].text
+    usage = {
+        "input_tokens":  resp.usage.input_tokens,
+        "output_tokens": resp.usage.output_tokens,
+    }
+
+    data = parse_json_response(raw)
+
+    if data is None:
+        log.warning("[%s/F] Response not valid JSON — retrying once", entry_id)
+        messages += [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content":
+             "Your response was not valid JSON. "
+             "Return ONLY the JSON object — no markdown fences, no explanation."},
+        ]
+        resp2 = api_call(client, messages, last_t, system=SYSTEM_PROMPT_F)
+        raw2  = resp2.content[0].text
+        usage["input_tokens"]  += resp2.usage.input_tokens
+        usage["output_tokens"] += resp2.usage.output_tokens
+        data = parse_json_response(raw2)
+
+        if data is None:
+            log.error("[%s/F] Retry also returned invalid JSON", entry_id)
+            data = {}
+
+    data["extraction_metadata"] = {
+        "source_id":    entry_id,
+        "country_iso3": entry["country_iso3"],
+        "year":         entry["year"],
+        "language":     entry.get("language", "en"),
+    }
+
+    _write_output_f(out_path, entry, data, usage)
+
+    log.info(
+        "[%s/F] off=%s def=%s | in=%d out=%d tokens",
+        entry_id,
+        data.get("has_offensive_programme"),
+        data.get("has_defensive_programme"),
+        usage["input_tokens"], usage["output_tokens"],
+    )
+    return {
+        "id":           entry_id,
+        "status":       "ok",
+        "calls":        1,
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+    }
+
+
+def _write_output_f(
+    out_path: Path,
+    entry: dict,
+    declaration: dict,
+    usage: dict,
+) -> None:
+    STRUCTURED_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "id":           entry["id"],
+        "country":      entry["country"],
+        "country_iso3": entry["country_iso3"],
+        "year":         entry["year"],
+        "total_api_calls": 1,
+        "total_tokens": usage,
+        **declaration,
+    }
+    out_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def process_entry_e(
+    entry: dict, client, last_t: list[float],
+    max_chars: int | None = FORM_E_MAX_CHARS,
+) -> dict:
+    """Extract Form E (legislation) for one document. Single API call, no chunking."""
+    entry_id  = entry["id"]
+    form_path = SEGMENTED_DIR / entry_id / "form_e.txt"
+    out_path  = STRUCTURED_DIR / f"{entry_id}_form_e.json"
+
+    if not form_path.exists():
+        return {"id": entry_id, "status": "no_form_e"}
+
+    text = form_path.read_text(encoding="utf-8")
+
+    if max_chars and len(text) > max_chars:
+        text = text[:max_chars]
+
+    messages = [{"role": "user", "content": text}]
+    try:
+        resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_E)
+    except Exception as exc:
+        log.error("[%s/E] API error: %s", entry_id, exc)
+        return {"id": entry_id, "status": "error", "error": str(exc)}
+
+    raw = resp.content[0].text.strip()
+    usage = {"input_tokens": resp.usage.input_tokens,
+             "output_tokens": resp.usage.output_tokens}
+    data = parse_json_response(raw)
+
+    if data is None:
+        log.warning("[%s/E] JSON parse failed; retrying", entry_id)
+        messages.append({"role": "assistant", "content": raw})
+        messages.append({"role": "user",
+                         "content": "Return only valid JSON, no other text."})
+        try:
+            resp2 = api_call(client, messages, last_t, system=SYSTEM_PROMPT_E)
+        except Exception as exc:
+            log.error("[%s/E] retry error: %s", entry_id, exc)
+            return {"id": entry_id, "status": "error", "error": str(exc)}
+        raw2 = resp2.content[0].text.strip()
+        usage["input_tokens"]  += resp2.usage.input_tokens
+        usage["output_tokens"] += resp2.usage.output_tokens
+        data = parse_json_response(raw2)
+        if data is None:
+            log.error("[%s/E] JSON parse failed after retry; raw=%r", entry_id, raw2[:200])
+            return {"id": entry_id, "status": "error",
+                    "calls": 2, **usage, "raw": raw2}
+
+    cats = data.get("categories") or {}
+    log.info("[%s/E] prohibitions=%s exports=%s | in=%d out=%d tokens",
+             entry_id,
+             (cats.get("prohibitions") or {}).get("legislation"),
+             (cats.get("exports") or {}).get("legislation"),
+             usage["input_tokens"], usage["output_tokens"])
+
+    _write_output_e(out_path, entry, data, usage, truncated=(max_chars is not None and len(form_path.read_text(encoding="utf-8")) > (max_chars or 0)))
+    return {"id": entry_id, "status": "ok", "calls": 1, **usage}
+
+
+def _write_output_e(
+    out_path: Path,
+    entry: dict,
+    declaration: dict,
+    usage: dict,
+    truncated: bool = False,
+) -> None:
+    STRUCTURED_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "id":           entry["id"],
+        "country":      entry["country"],
+        "country_iso3": entry["country_iso3"],
+        "year":         entry["year"],
+        "total_api_calls": 1,
+        "total_tokens": usage,
+        "input_truncated": truncated,
+        **declaration,
+        "extraction_metadata": {
+            "source_id":    entry["id"],
+            "country_iso3": entry["country_iso3"],
+            "year":         entry["year"],
+            "language":     entry.get("language", "en"),
+        },
+    }
+    out_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -985,10 +1288,16 @@ def main() -> None:
                         help="Extract Form G (vaccine facilities).")
     parser.add_argument("--form-a2", action="store_true",
                         help="Extract Form A Part 2 (national biological defence programmes).")
+    parser.add_argument("--form-f", action="store_true",
+                        help="Extract Form F (past offensive/defensive programmes).")
+    parser.add_argument("--form-e", action="store_true",
+                        help="Extract Form E (national biosafety/biosecurity legislation).")
+    parser.add_argument("--no-e-truncate", action="store_true",
+                        help="Disable Form E truncation (send full text; for sense-checking).")
     args = parser.parse_args()
 
-    if args.form_g and args.form_a2:
-        log.error("--form-g and --form-a2 are mutually exclusive")
+    if sum([args.form_g, args.form_a2, args.form_f, args.form_e]) > 1:
+        log.error("--form-g, --form-a2, --form-f, and --form-e are mutually exclusive")
         raise SystemExit(1)
 
     if not CATALOGUE_PATH.exists():
@@ -1003,6 +1312,12 @@ def main() -> None:
     elif args.form_g:
         form_file = "form_g.txt"
         suffix    = "_form_g.json"
+    elif args.form_f:
+        form_file = "form_f.txt"
+        suffix    = "_form_f.json"
+    elif args.form_e:
+        form_file = "form_e.txt"
+        suffix    = "_form_e.json"
     else:
         form_file = "form_a1.txt"
         suffix    = "_form_a1.json"
@@ -1047,6 +1362,10 @@ def main() -> None:
         desc = "Extracting Form A Part 2"
     elif args.form_g:
         desc = "Extracting Form G"
+    elif args.form_f:
+        desc = "Extracting Form F"
+    elif args.form_e:
+        desc = "Extracting Form E"
     else:
         desc = "Extracting Form A Part 1"
 
@@ -1057,6 +1376,13 @@ def main() -> None:
         elif args.form_g:
             result = process_entry_g(entry, client, last_t)
             item_key = "vaccine_facilities"
+        elif args.form_f:
+            result = process_entry_f(entry, client, last_t)
+            item_key = None
+        elif args.form_e:
+            max_chars = None if args.no_e_truncate else FORM_E_MAX_CHARS
+            result = process_entry_e(entry, client, last_t, max_chars=max_chars)
+            item_key = None
         else:
             result = process_entry(entry, client, last_t)
             item_key = "facilities"
@@ -1067,6 +1393,8 @@ def main() -> None:
             n_ok += 1
             if args.form_a2:
                 total_items += result.get("programmes", 0) + result.get("facilities", 0)
+            elif args.form_f or args.form_e:
+                total_items += 1
             else:
                 total_items += result.get(item_key, 0)
             total_calls += result.get("calls", 0)
@@ -1091,7 +1419,11 @@ def main() -> None:
             )
 
     # ── Summary ───────────────────────────────────────────────────────────────
-    item_label = "programmes+facilities" if args.form_a2 else ("vaccine facilities" if args.form_g else "facilities")
+    item_label = ("programmes+facilities" if args.form_a2
+                  else "declarations" if args.form_f
+                  else "legislation records" if args.form_e
+                  else "vaccine facilities" if args.form_g
+                  else "facilities")
     print("\n── Summary ──────────────────────────────────────────────────")
     print(f"  Documents processed:  {n_ok}")
     if n_skipped:
