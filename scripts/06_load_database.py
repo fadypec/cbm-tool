@@ -87,6 +87,7 @@ def load_documents(cur, catalogue: list[dict]) -> int:
         (
             e["id"],
             e.get("country_iso3"),
+            _str(e.get("country")),
             _int(str(e.get("year", ""))) ,
             _str(e.get("language")),
             _str(e.get("source_url")),
@@ -105,9 +106,9 @@ def load_documents(cur, catalogue: list[dict]) -> int:
             deduped.append(r)
 
     psycopg2.extras.execute_batch(cur, """
-        INSERT INTO documents (id, country_iso3, year, language, source_url, is_amendment)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (id) DO NOTHING
+        INSERT INTO documents (id, country_iso3, country_name, year, language, source_url, is_amendment)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO UPDATE SET country_name = EXCLUDED.country_name
     """, deduped)
     return len(deduped)
 
@@ -470,7 +471,19 @@ def main() -> None:
                     log.error("Unknown table: %s", target)
                     sys.exit(1)
             else:
-                # Full reload: truncate all in reverse FK order, then load
+                # Full reload: snapshot geom columns, truncate, reload, restore geom
+                log.info("Saving geocoded coordinates before truncation …")
+                cur.execute("""
+                    SELECT fy.canonical_facility_id, fy.document_id,
+                           fy.geom, fy.geocode_source, fy.geocode_confidence
+                    FROM   facility_years fy
+                    WHERE  fy.geom IS NOT NULL
+                """)
+                fy_geom = cur.fetchall()
+                # Note: defence_facilities uses a serial PK that resets on reload;
+                # geom for those rows is restored by re-running 07_geocode.py if needed.
+                log.info("  Saved %d facility_years geom rows", len(fy_geom))
+
                 log.info("Truncating all tables …")
                 cur.execute(
                     "TRUNCATE TABLE " + ", ".join(TRUNCATE_ORDER) + " CASCADE"
@@ -478,6 +491,21 @@ def main() -> None:
                 for name, fn, needs_cat in ALL_TABLES:
                     n = fn(cur, catalogue) if needs_cat else fn(cur)
                     log.info("  %-28s %d rows", name, n)
+
+                # Restore geocoded geometry
+                if fy_geom:
+                    psycopg2.extras.execute_batch(cur, """
+                        UPDATE facility_years
+                        SET    geom               = %s,
+                               geocode_source     = %s,
+                               geocode_confidence = %s
+                        WHERE  canonical_facility_id = %s
+                        AND    document_id           = %s
+                    """, [
+                        (row[2], row[3], row[4], row[0], row[1])
+                        for row in fy_geom
+                    ])
+                    log.info("  Restored %d facility_years geom", len(fy_geom))
 
     conn.close()
     log.info("Database load complete.")
