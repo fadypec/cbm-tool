@@ -182,27 +182,29 @@ def api_country(iso3: str):
 
 # ── /api/map/facilities ───────────────────────────────────────────────────────
 
-@app.get("/api/map/facilities", summary="GeoJSON: one point per geocoded canonical facility")
+@app.get("/api/map/facilities", summary="GeoJSON: all geocoded Form A1 facility-year records")
 def api_map_facilities():
+    """Returns one feature per geocoded facility-year (all years).
+    Client-side year filtering applies to this dataset."""
     with cursor() as cur:
         cur.execute("""
-            SELECT DISTINCT ON (f.canonical_facility_id)
+            SELECT
                 f.canonical_facility_id,
                 COALESCE(f.canonical_name, fy.facility_name) AS name,
-                f.country_iso3,
-                f.latest_containment                         AS containment,
+                fy.country_iso3,
+                fy.highest_containment                        AS containment,
                 fy.year,
                 fy.city,
                 fy.geocode_confidence,
-                ST_X(fy.geom)                                AS lon,
-                ST_Y(fy.geom)                                AS lat,
+                ST_X(fy.geom)                                 AS lon,
+                ST_Y(fy.geom)                                 AS lat,
                 (SELECT country_name FROM documents
-                 WHERE  country_iso3 = f.country_iso3
-                 AND    country_name IS NOT NULL LIMIT 1)    AS country_name
-            FROM facilities f
-            JOIN facility_years fy ON fy.canonical_facility_id = f.canonical_facility_id
+                 WHERE  country_iso3 = fy.country_iso3
+                 AND    country_name IS NOT NULL LIMIT 1)     AS country_name
+            FROM facility_years fy
+            JOIN facilities f ON f.canonical_facility_id = fy.canonical_facility_id
             WHERE fy.geom IS NOT NULL
-            ORDER BY f.canonical_facility_id, fy.year DESC
+            ORDER BY fy.year, f.canonical_facility_id
         """)
         rows = cur.fetchall()
 
@@ -219,6 +221,94 @@ def api_map_facilities():
                 "country_iso3": r["country_iso3"],
                 "country_name": r["country_name"],
                 "containment":  r["containment"],
+                "year":         r["year"],
+                "city":         r["city"],
+                "geocode_conf": r["geocode_confidence"],
+            },
+        }
+        for r in rows
+    ]
+    return _json({"type": "FeatureCollection", "features": features})
+
+
+@app.get("/api/map/defence", summary="GeoJSON: all geocoded Form A2 defence facility records")
+def api_map_defence():
+    with cursor() as cur:
+        cur.execute("""
+            SELECT
+                df.id,
+                df.facility_name                              AS name,
+                df.country_iso3,
+                df.year,
+                df.city,
+                df.geocode_confidence,
+                ST_X(df.geom)                                 AS lon,
+                ST_Y(df.geom)                                 AS lat,
+                (SELECT country_name FROM documents
+                 WHERE  country_iso3 = df.country_iso3
+                 AND    country_name IS NOT NULL LIMIT 1)     AS country_name
+            FROM defence_facilities df
+            WHERE df.geom IS NOT NULL
+            ORDER BY df.year, df.country_iso3
+        """)
+        rows = cur.fetchall()
+
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [float(r["lon"]), float(r["lat"])],
+            },
+            "properties": {
+                "id":           r["id"],
+                "name":         r["name"],
+                "country_iso3": r["country_iso3"],
+                "country_name": r["country_name"],
+                "year":         r["year"],
+                "city":         r["city"],
+                "geocode_conf": r["geocode_confidence"],
+            },
+        }
+        for r in rows
+    ]
+    return _json({"type": "FeatureCollection", "features": features})
+
+
+@app.get("/api/map/vaccines", summary="GeoJSON: all geocoded Form G vaccine facility records")
+def api_map_vaccines():
+    with cursor() as cur:
+        cur.execute("""
+            SELECT
+                vf.id,
+                vf.facility_name                              AS name,
+                vf.country_iso3,
+                vf.year,
+                vf.city,
+                vf.geocode_confidence,
+                ST_X(vf.geom)                                 AS lon,
+                ST_Y(vf.geom)                                 AS lat,
+                (SELECT country_name FROM documents
+                 WHERE  country_iso3 = vf.country_iso3
+                 AND    country_name IS NOT NULL LIMIT 1)     AS country_name
+            FROM vaccine_facility_years vf
+            WHERE vf.geom IS NOT NULL
+            ORDER BY vf.year, vf.country_iso3
+        """)
+        rows = cur.fetchall()
+
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [float(r["lon"]), float(r["lat"])],
+            },
+            "properties": {
+                "id":           r["id"],
+                "name":         r["name"],
+                "country_iso3": r["country_iso3"],
+                "country_name": r["country_name"],
                 "year":         r["year"],
                 "city":         r["city"],
                 "geocode_conf": r["geocode_confidence"],

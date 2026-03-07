@@ -218,7 +218,8 @@ def geocode_table(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--table", choices=["facility_years", "defence_facilities"],
+    parser.add_argument("--table",
+                        choices=["facility_years", "defence_facilities", "vaccine_facility_years"],
                         help="Geocode only this table.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print geocoding results without writing to the database.")
@@ -239,7 +240,7 @@ def main() -> None:
 
     tables = (
         [args.table] if args.table
-        else ["facility_years", "defence_facilities"]
+        else ["facility_years", "defence_facilities", "vaccine_facility_years"]
     )
 
     if args.dry_run:

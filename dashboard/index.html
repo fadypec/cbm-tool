@@ -9,6 +9,9 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Leaflet 1.9 -->
     <link href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet">
+    <!-- Leaflet MarkerCluster -->
+    <link href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" rel="stylesheet">
+    <link href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" rel="stylesheet">
     <!-- Custom -->
     <link href="/static/style.css" rel="stylesheet">
 </head>
@@ -29,8 +32,6 @@
 
     <!-- Sidebar -->
     <aside id="sidebar">
-
-        <!-- Panel: country list -->
         <div id="panel-list" class="side-panel">
             <div class="side-header">
                 <span class="side-title">Countries</span>
@@ -40,11 +41,9 @@
                 <div class="side-placeholder">Loading…</div>
             </div>
         </div>
-
-        <!-- Panel: country detail -->
         <div id="panel-detail" class="side-panel" style="display:none">
             <div class="side-header">
-                <button id="back-btn" onclick="showPanel('list')" title="Back to country list">←</button>
+                <button id="back-btn" onclick="showPanel('list')" title="Back">←</button>
                 <span id="detail-title" class="side-title ms-2"></span>
             </div>
             <div id="detail-loading" class="side-placeholder">Loading…</div>
@@ -52,9 +51,9 @@
                 <div class="side-section">
                     <div class="side-section-label">FORM COMPLIANCE</div>
                     <div id="compliance-legend" class="compliance-legend">
-                        <span><span class="badge-sub">●</span> Substantive</span>
-                        <span><span class="badge-ntd">○</span> Nothing to declare</span>
-                        <span><span class="badge-abs">·</span> Absent</span>
+                        <span><span class="leg-swatch" style="background:#1e7e45"></span>Substantive</span>
+                        <span><span class="leg-swatch" style="background:#7a4010"></span>Nothing to declare</span>
+                        <span><span class="leg-swatch" style="background:#1c1e2e;border:1px solid #3a3c50"></span>Absent</span>
                     </div>
                     <div id="compliance-grid"></div>
                 </div>
@@ -64,13 +63,66 @@
                 </div>
             </div>
         </div>
-
     </aside>
 
     <!-- Map -->
-    <div id="map"></div>
+    <div id="map">
 
-</div>
+        <!-- Filter panel (positioned over map) -->
+        <div id="filter-panel">
+            <div id="fp-header">
+                <span class="fp-title">Filters</span>
+                <button id="fp-collapse" onclick="toggleFilterPanel()" title="Collapse">−</button>
+            </div>
+            <div id="fp-body">
+
+                <div class="fp-section">
+                    <div class="fp-label">LAYERS</div>
+                    <label class="fp-check"><input type="checkbox" id="layer-A1" checked onchange="onFilterChange()">
+                        <span class="fp-layer-dot" style="background:#4a90d9"></span>Research (A1)
+                    </label>
+                    <label class="fp-check"><input type="checkbox" id="layer-A2" checked onchange="onFilterChange()">
+                        <span class="fp-layer-dot" style="background:#8b1a1a"></span>Defence (A2)
+                    </label>
+                    <label class="fp-check"><input type="checkbox" id="layer-G" checked onchange="onFilterChange()">
+                        <span class="fp-layer-dot" style="background:#0a7a6a"></span>Vaccine (G)
+                    </label>
+                </div>
+
+                <div class="fp-section">
+                    <div class="fp-label">BSL LEVEL <span class="fp-sublabel">(Research only)</span></div>
+                    <div class="fp-bsl-grid">
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-4" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#c0392b"></span>BSL‑4</label>
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-3" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#e67e22"></span>BSL‑3</label>
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-2" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#f39c12"></span>BSL‑2</label>
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-1" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#27ae60"></span>BSL‑1</label>
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="unknown" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#95a5a6"></span>?</label>
+                    </div>
+                </div>
+
+                <div class="fp-section">
+                    <div class="fp-label">YEAR &nbsp;<span id="year-display" class="fp-year-val">ALL</span></div>
+                    <label class="fp-check"><input type="checkbox" id="all-years" checked onchange="onAllYearsToggle()"> All years</label>
+                    <input type="range" id="year-slider" min="1988" max="2025" value="2025" step="1" disabled
+                           oninput="onYearInput(this.value)" onchange="onFilterChange()">
+                    <div class="fp-year-range"><span id="yr-min">1988</span><span id="yr-max">2025</span></div>
+                </div>
+
+                <div class="fp-section">
+                    <label class="fp-check"><input type="checkbox" id="hide-low" onchange="onFilterChange()"> Hide low-confidence geocodes</label>
+                </div>
+
+                <div class="fp-section fp-actions">
+                    <button class="fp-btn" onclick="exportCSV()">⬇ Export CSV</button>
+                    <button class="fp-btn" data-bs-toggle="modal" data-bs-target="#about-modal">ℹ About</button>
+                </div>
+
+            </div><!-- /fp-body -->
+        </div><!-- /filter-panel -->
+
+    </div><!-- /map -->
+
+</div><!-- /main -->
 
 <!-- ── Entity modal ────────────────────────────────────────────────────── -->
 <div class="modal fade" id="entity-modal" tabindex="-1" aria-hidden="true">
@@ -85,9 +137,79 @@
     </div>
 </div>
 
+<!-- ── About / Data Limitations modal ─────────────────────────────────── -->
+<div class="modal fade" id="about-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">About this data</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <h6>Dataset</h6>
+                <p>This tool visualises structured data extracted from <strong>Biological Weapons Convention (BWC)
+                Confidence-Building Measure (CBM)</strong> submissions. The dataset covers
+                <strong>510 publicly available submissions from 51 states parties</strong>,
+                downloaded from the UN BWC portal (<a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>),
+                spanning 1988–2026.</p>
+
+                <h6>Restricted submissions <span class="badge" style="background:#5c3370;font-size:11px">purple on map</span></h6>
+                <p><strong>China, France, Russia, and India</strong> have submitted CBMs to the
+                Implementation Support Unit (ISU) but these are designated as confidential and
+                are not publicly available. They appear shaded on the map. Their absence from
+                the facility data does not reflect non-participation — it reflects a transparency
+                choice or designation.</p>
+
+                <h6>Data extraction</h6>
+                <p>All structured information (facility names, locations, containment levels,
+                organisational details) was extracted from PDF documents by a <strong>large language
+                model (Anthropic Claude Sonnet)</strong>. Extraction confidence scores (0–1) are
+                shown per facility where available. Errors and omissions are possible, particularly
+                for scanned or non-English submissions.</p>
+
+                <h6>Geocoding</h6>
+                <p>Facility locations are geocoded using <strong>OpenStreetMap Nominatim</strong>
+                from the address and city fields declared in each submission.
+                Match confidence is rated:</p>
+                <ul>
+                    <li><strong>High</strong> (Nominatim importance &gt; 0.6) — specific building or address match</li>
+                    <li><strong>Medium</strong> (0.3–0.6) — neighbourhood or district match</li>
+                    <li><strong>Low</strong> (&lt; 0.3) — city-level or country-level only; may be inaccurate by tens of kilometres</li>
+                </ul>
+                <p>Facilities without a geocodable address or city are <strong>not shown on the map</strong>
+                (~3% of records). Use the filter panel to hide low-confidence geocodes.</p>
+
+                <h6>Layers</h6>
+                <ul>
+                    <li><strong>Research facilities (Form A1)</strong> — declared biological research centres and laboratories, coloured by highest biosafety level (BSL)</li>
+                    <li><strong>Defence facilities (Form A Part 2)</strong> — facilities supporting declared national biological defence programmes</li>
+                    <li><strong>Vaccine facilities (Form G)</strong> — declared vaccine production facilities</li>
+                </ul>
+
+                <h6>"Nothing to declare"</h6>
+                <p>In the compliance grid, <strong>orange cells</strong> indicate a country submitted
+                that form but declared no relevant activity — this is substantively different from
+                not submitting the form at all (dark cells). A country with all orange cells
+                is actively participating but declaring no facilities.</p>
+
+                <h6>Form A1 submission rate (choropleth)</h6>
+                <p>The map background shows the proportion of a country's submissions that included
+                substantive Form A1 data. A rate of 100% means every submission contained facility
+                declarations. Some countries submit annually; others only occasionally.</p>
+
+                <hr>
+                <p class="text-muted small">Data extracted and processed as part of academic research on BWC transparency.
+                Not an official UN or ISU product. All source documents are publicly available
+                at <a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ── Scripts ─────────────────────────────────────────────────────────── -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="/static/app.js"></script>
 
 </body>
