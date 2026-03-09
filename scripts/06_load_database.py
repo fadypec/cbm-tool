@@ -480,9 +480,19 @@ def main() -> None:
                     WHERE  fy.geom IS NOT NULL
                 """)
                 fy_geom = cur.fetchall()
-                # Note: defence_facilities uses a serial PK that resets on reload;
-                # geom for those rows is restored by re-running 07_geocode.py if needed.
                 log.info("  Saved %d facility_years geom rows", len(fy_geom))
+
+                # defence_facilities uses a serial PK that resets on truncation, so
+                # we cannot restore by PK. Use (document_id, facility_name) instead —
+                # both are stable across reloads since they come directly from the CSV.
+                cur.execute("""
+                    SELECT df.document_id, df.facility_name,
+                           df.geom, df.geocode_source, df.geocode_confidence
+                    FROM   defence_facilities df
+                    WHERE  df.geom IS NOT NULL
+                """)
+                df_geom = cur.fetchall()
+                log.info("  Saved %d defence_facilities geom rows", len(df_geom))
 
                 log.info("Truncating all tables …")
                 cur.execute(
@@ -492,7 +502,7 @@ def main() -> None:
                     n = fn(cur, catalogue) if needs_cat else fn(cur)
                     log.info("  %-28s %d rows", name, n)
 
-                # Restore geocoded geometry
+                # Restore geocoded geometry for facility_years
                 if fy_geom:
                     psycopg2.extras.execute_batch(cur, """
                         UPDATE facility_years
@@ -506,6 +516,21 @@ def main() -> None:
                         for row in fy_geom
                     ])
                     log.info("  Restored %d facility_years geom", len(fy_geom))
+
+                # Restore geocoded geometry for defence_facilities
+                if df_geom:
+                    psycopg2.extras.execute_batch(cur, """
+                        UPDATE defence_facilities
+                        SET    geom               = %s,
+                               geocode_source     = %s,
+                               geocode_confidence = %s
+                        WHERE  document_id   = %s
+                        AND    facility_name = %s
+                    """, [
+                        (row[2], row[3], row[4], row[0], row[1])
+                        for row in df_geom
+                    ])
+                    log.info("  Restored %d defence_facilities geom", len(df_geom))
 
     conn.close()
     log.info("Database load complete.")

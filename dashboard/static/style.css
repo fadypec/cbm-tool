@@ -79,6 +79,25 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 /* ── Main layout ────────────────────────────────────────────────────────── */
 #main { display: flex; height: calc(100vh - 54px); }
 
+/* ── Sidebar collapse tab ───────────────────────────────────────────────── */
+#sidebar-tab {
+    align-self: flex-start;
+    margin-top: 10px;
+    z-index: 900;
+    background: #12141f;
+    border: 1px solid #2a2a3a;
+    border-left: none;
+    border-radius: 0 4px 4px 0;
+    color: #6070a0;
+    cursor: pointer;
+    padding: 6px 4px;
+    font-size: 11px;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color 0.15s;
+}
+#sidebar-tab:hover { color: #c0ccf0; }
+
 /* ── Sidebar ────────────────────────────────────────────────────────────── */
 #sidebar {
     width: 320px;
@@ -88,6 +107,11 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    transition: width 0.25s ease;
+}
+#sidebar.collapsed {
+    width: 0;
+    border-right: none;
 }
 
 .side-panel { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
@@ -228,6 +252,13 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
     gap: 2px 4px;
 }
 
+.fp-bsl-note {
+    margin-top: 6px;
+    font-size: 10px;
+    color: #e67e22;
+    line-height: 1.4;
+}
+
 .fp-bsl-dot {
     display: inline-block;
     width: 8px; height: 8px;
@@ -238,14 +269,35 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
     vertical-align: middle;
 }
 
-/* Year slider */
-#year-slider {
-    width: 100%;
+/* Year controls */
+.fp-year-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin: 6px 0 2px;
-    accent-color: #4a8ad4;
 }
 
-.fp-year-val { color: #4a8ad4; font-weight: 700; }
+#year-input {
+    width: 72px;
+    flex-shrink: 0;
+    padding: 3px 6px;
+    background: #eef1fa;
+    border: 1px solid #c8d0e8;
+    border-radius: 5px;
+    font-size: 12px;
+    color: #2a3060;
+    text-align: center;
+    -moz-appearance: textfield;
+}
+#year-input::-webkit-inner-spin-button,
+#year-input::-webkit-outer-spin-button { opacity: 1; }
+#year-input:disabled { color: #a0a8c0; background: #f4f5fa; }
+
+#year-slider {
+    flex: 1;
+    margin: 0;
+    accent-color: #4a8ad4;
+}
 
 .fp-year-range {
     display: flex;
@@ -301,6 +353,9 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 .yr-kv { display: grid; grid-template-columns: 140px 1fr; gap: 4px 12px; font-size: 13px; }
 .yr-kv dt { color: #777; font-weight: normal; margin: 0; }
 .yr-kv dd { color: #222; margin: 0; word-break: break-word; }
+
+/* ── Remove browser focus outline on Leaflet SVG paths ─────────────────── */
+.leaflet-interactive:focus { outline: none; }
 
 /* ── Scrollbars ─────────────────────────────────────────────────────────── */
 .side-scroll::-webkit-scrollbar { width: 4px; }

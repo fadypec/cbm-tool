@@ -4,6 +4,8 @@
 
 // Countries whose CBM data is submitted to the ISU but not publicly available
 const RESTRICTED = new Set(['CHN', 'FRA', 'RUS', 'IND']);
+// This GeoJSON dataset gives France ISO code '-99'; match by name as fallback
+const RESTRICTED_NAMES = new Set(['France']);
 
 // ── State ──────────────────────────────────────────────────────────────────
 
@@ -16,6 +18,9 @@ const STATE = {
 
 // Raw GeoJSON data keyed by layer
 const DATA = { A1: null, A2: null, G: null };
+
+// Latest submission year per country per layer (for default deduplication)
+const LATEST_YEAR = {};
 
 // Leaflet MarkerClusterGroup per layer
 const CLUSTERS = {};
@@ -56,6 +61,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         DATA.A2 = a2;
         DATA.G  = vaccines;
 
+        computeLatestYears();
         applyFilters();
         addLegend();
         loadChoropleth();
@@ -92,12 +98,18 @@ function renderStats(s) {
 // ── Map ────────────────────────────────────────────────────────────────────
 
 function initMap() {
-    map = L.map('map', { zoomControl: false }).setView([20, 0], 2);
+    map = L.map('map', {
+        zoomControl: false,
+        minZoom: 2,
+        maxBounds: [[-90, -180], [90, 180]],
+        maxBoundsViscosity: 1.0,
+    }).setView([20, 0], 2);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
         attribution:
             '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' +
             ' contributors &copy; <a href="https://carto.com/">CARTO</a>',
         maxZoom: 19,
+        noWrap: true,
     }).addTo(map);
     L.control.zoom({ position: 'topright' }).addTo(map);
 }
@@ -149,10 +161,28 @@ function markerOptions(layer, feature) {
 
 // ── Filter logic ───────────────────────────────────────────────────────────
 
+function computeLatestYears() {
+    for (const layer of ['A1', 'A2', 'G']) {
+        if (!DATA[layer]) continue;
+        const m = {};
+        for (const f of DATA[layer].features) {
+            const { country_iso3, year } = f.properties;
+            if (!m[country_iso3] || year > m[country_iso3]) m[country_iso3] = year;
+        }
+        LATEST_YEAR[layer] = m;
+    }
+}
+
 function matchesFilter(layer, feature) {
     const p = feature.properties;
-    if (STATE.year !== null && p.year !== STATE.year) return false;
-    if (STATE.hideLow && p.geocode_conf === 'low')   return false;
+    if (STATE.year !== null) {
+        if (p.year !== STATE.year) return false;
+    } else {
+        // Default: show only each country's latest submission year
+        const latest = LATEST_YEAR[layer]?.[p.country_iso3];
+        if (latest && p.year !== latest) return false;
+    }
+    if (STATE.hideLow && p.geocode_conf === 'low') return false;
     if (layer === 'A1' && !STATE.bsl[normalizeBsl(p.containment)]) return false;
     return true;
 }
@@ -204,6 +234,14 @@ function buildPopup(layer, feature) {
 
 // ── Filter panel UI ────────────────────────────────────────────────────────
 
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const tab = document.getElementById('sidebar-tab');
+    const collapsed = sidebar.classList.toggle('collapsed');
+    tab.textContent = collapsed ? '▶' : '◀';
+    tab.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+}
+
 function toggleFilterPanel() {
     filterCollapsed = !filterCollapsed;
     document.getElementById('fp-body').style.display = filterCollapsed ? 'none' : '';
@@ -221,6 +259,12 @@ function onFilterChange() {
         STATE.bsl[cb.value] = cb.checked;
     });
 
+    // Show warning when BSL filter is partial and other layers are visible
+    const bslAllChecked = Object.values(STATE.bsl).every(Boolean);
+    const otherLayersVisible = STATE.layers.A2 || STATE.layers.G;
+    const warn = document.getElementById('bsl-warning');
+    if (warn) warn.style.display = (!bslAllChecked && otherLayersVisible) ? 'block' : 'none';
+
     // Read geocode confidence
     STATE.hideLow = document.getElementById('hide-low').checked;
 
@@ -229,30 +273,62 @@ function onFilterChange() {
 
 function onAllYearsToggle() {
     const allChecked = document.getElementById('all-years').checked;
-    const slider = document.getElementById('year-slider');
-    slider.disabled = allChecked;
+    const slider   = document.getElementById('year-slider');
+    const numInput = document.getElementById('year-input');
     if (allChecked) {
+        slider.setAttribute('disabled', '');
+        numInput.setAttribute('disabled', '');
         STATE.year = null;
-        document.getElementById('year-display').textContent = 'ALL';
     } else {
+        slider.removeAttribute('disabled');
+        numInput.removeAttribute('disabled');
         STATE.year = parseInt(slider.value);
-        document.getElementById('year-display').textContent = STATE.year;
+        numInput.value = STATE.year;
     }
     applyFilters();
 }
 
+let _yearInputTimer = null;
+
+// Called when the number input is typed into
 function onYearInput(val) {
-    document.getElementById('year-display').textContent = val;
-    STATE.year = parseInt(val);
+    const y = parseInt(val);
+    if (isNaN(y)) return;
+    STATE.year = y;
+    const slider = document.getElementById('year-slider');
+    if (y >= parseInt(slider.min) && y <= parseInt(slider.max)) slider.value = y;
+    clearTimeout(_yearInputTimer);
+    _yearInputTimer = setTimeout(applyFilters, 400);
+}
+
+// Called when the range slider is dragged
+function onYearSlider(val) {
+    const y = parseInt(val);
+    STATE.year = y;
+    document.getElementById('year-input').value = y;
 }
 
 function initYearSlider(minYear, maxYear) {
-    const slider = document.getElementById('year-slider');
-    slider.min   = minYear;
-    slider.max   = maxYear;
-    slider.value = maxYear;
+    const slider   = document.getElementById('year-slider');
+    const numInput = document.getElementById('year-input');
+    slider.min   = minYear;   slider.max   = maxYear;
+    numInput.min = minYear;   numInput.max = maxYear;
     document.getElementById('yr-min').textContent = minYear;
     document.getElementById('yr-max').textContent = maxYear;
+    // Only set value when not already in a specific-year mode (from restoreFromHash)
+    if (STATE.year === null) {
+        slider.value   = maxYear;
+        numInput.value = maxYear;
+    }
+    // Ensure disabled state matches checkbox
+    const allChecked = document.getElementById('all-years').checked;
+    if (allChecked) {
+        slider.setAttribute('disabled', '');
+        numInput.setAttribute('disabled', '');
+    } else {
+        slider.removeAttribute('disabled');
+        numInput.removeAttribute('disabled');
+    }
 }
 
 // ── CSV Export ─────────────────────────────────────────────────────────────
@@ -333,12 +409,12 @@ function restoreFromHash() {
 
     if (p.has('year')) {
         STATE.year = parseInt(p.get('year'));
-        const slider = document.getElementById('year-slider');
-        if (slider) { slider.value = STATE.year; slider.disabled = false; }
+        const slider   = document.getElementById('year-slider');
+        const numInput = document.getElementById('year-input');
+        if (slider)   { slider.value   = STATE.year; slider.disabled   = false; }
+        if (numInput) { numInput.value = STATE.year; numInput.disabled = false; }
         const allYears = document.getElementById('all-years');
         if (allYears) allYears.checked = false;
-        const yd = document.getElementById('year-display');
-        if (yd) yd.textContent = STATE.year;
     }
 
     if (p.get('conf') === 'nol') {
@@ -362,43 +438,35 @@ function choroColor(rate) {
 
 async function loadChoropleth() {
     try {
-        const world = await fetch(
-            'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson'
-        ).then(r => r.json());
+        const world = await fetch('/static/countries.geojson').then(r => r.json());
 
         choroLayer = L.geoJSON(world, {
             style: feature => {
-                const iso3 = feature.properties.ISO_A3;
-                if (RESTRICTED.has(iso3)) {
+                const iso3 = feature.properties['ISO3166-1-Alpha-3'];
+                const name = feature.properties.name;
+                const isRestricted = RESTRICTED.has(iso3) || RESTRICTED_NAMES.has(name);
+                if (isRestricted) {
                     return { fillColor: '#5c3370', fillOpacity: 0.45, weight: 0.5, color: '#999', opacity: 0.6 };
                 }
                 const d = complianceRates[iso3];
+                if (!d) {
+                    return { fillColor: 'url(#country-hatch)', fillOpacity: 1, weight: 0.3, color: '#ccc', opacity: 0.4 };
+                }
                 return {
-                    fillColor:   choroColor(d ? +d.a1_rate : null),
-                    fillOpacity: d ? 0.55 : 0.07,
+                    fillColor:   choroColor(+d.a1_rate),
+                    fillOpacity: 0.55,
                     weight:      0.5,
                     color:       '#aaa',
                     opacity:     0.6,
                 };
             },
             onEachFeature: (feature, layer) => {
-                const iso3 = feature.properties.ISO_A3;
-                const name = feature.properties.ADMIN;
-                if (RESTRICTED.has(iso3)) {
-                    layer.bindTooltip(
-                        `<strong>${name}</strong><br><em>Restricted — submitted to ISU only, not publicly available</em>`,
-                        { sticky: true }
-                    );
-                    return;
-                }
+                const iso3 = feature.properties['ISO3166-1-Alpha-3'];
+                const name = feature.properties.name;
+                const isRestricted = RESTRICTED.has(iso3) || RESTRICTED_NAMES.has(name);
+                if (isRestricted) return;
                 const d = complianceRates[iso3];
-                if (!d) return;
-                const pct = d.a1_rate != null ? Math.round(d.a1_rate * 100) + '%' : '—';
-                layer.bindTooltip(
-                    `<strong>${name}</strong><br>Form A1 rate: ${pct}<br>${d.submission_count} submissions`,
-                    { sticky: true }
-                );
-                layer.on('click', () => selectCountry(iso3));
+                if (d) layer.on('click', () => selectCountry(iso3));
             },
         });
 

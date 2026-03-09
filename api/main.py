@@ -91,6 +91,11 @@ def index():
     return FileResponse(DASHBOARD_DIR / "index.html")
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse(DASHBOARD_DIR / "static" / "favicon.svg", media_type="image/svg+xml")
+
+
 # ── /api/stats ───────────────────────────────────────────────────────────────
 
 @app.get("/api/stats", summary="Global summary statistics")
@@ -188,7 +193,7 @@ def api_map_facilities():
     Client-side year filtering applies to this dataset."""
     with cursor() as cur:
         cur.execute("""
-            SELECT
+            SELECT DISTINCT ON (f.canonical_facility_id, fy.year)
                 f.canonical_facility_id,
                 COALESCE(f.canonical_name, fy.facility_name) AS name,
                 fy.country_iso3,
@@ -204,7 +209,7 @@ def api_map_facilities():
             FROM facility_years fy
             JOIN facilities f ON f.canonical_facility_id = fy.canonical_facility_id
             WHERE fy.geom IS NOT NULL
-            ORDER BY fy.year, f.canonical_facility_id
+            ORDER BY f.canonical_facility_id, fy.year, fy.document_id
         """)
         rows = cur.fetchall()
 

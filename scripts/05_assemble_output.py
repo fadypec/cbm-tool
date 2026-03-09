@@ -54,7 +54,27 @@ OUTPUT_DIR     = PROJECT_ROOT / "data" / "output"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-SIMILARITY_THRESHOLD = 85   # token_sort_ratio score to merge two facility names
+SIMILARITY_THRESHOLD      = 85   # token_sort_ratio to merge facilities by name (cross-year)
+SAME_YEAR_THRESHOLD       = 95   # higher bar when both records are from the same year
+                                 # (same-year records are in the same CBM submission and
+                                 # are therefore distinct facilities unless names are nearly
+                                 # identical — prevents merging e.g. MEX state labs)
+
+# Anchor-merge overrides: (country_iso3, anchor_substring) pairs.
+# All records whose facility_name contains the anchor string (case-insensitive) are
+# forced into one canonical entity, regardless of their token_sort_ratio score.
+# Needed when a lab's formal name grows or shrinks with institutional context across
+# years and the string similarity drops below the threshold, e.g.:
+#   CAN: "National Microbiology Laboratory" (short form, 2013–2022)
+#     vs "National Microbiology Laboratory, Public Health Agency of Canada,
+#         Canadian Science Centre for Human and Animal Health" (full form, 2011–2019)
+#     vs "National Microbiology Laboratory, Canadian Science Centre for Human
+#         and Animal Health" (medium form, 2023–2025)
+# All three refer to the same physical lab at 1015 Arlington Avenue, Winnipeg.
+ANCHOR_MERGES: list[tuple[str, str]] = [
+    ("CAN", "National Microbiology Laboratory"),
+    ("CAN", "National Centre for Foreign Animal Disease"),
+]
 
 # Forms tracked in the compliance matrix (Form 0 is the cover page, not tracked)
 COMPLIANCE_FORMS = ["A1", "A2", "B", "C", "E", "F", "G"]
@@ -154,42 +174,121 @@ def load_catalogue_index() -> dict[str, str]:
     return {e["id"]: e.get("language", "en") for e in load_catalogue()}
 
 
-def load_all_facilities() -> list[dict]:
-    """Return a flat list of all facility dicts from every structured JSON."""
+def get_secondary_source_ids(catalogue: list[dict]) -> set[str]:
+    """
+    Return the set of source IDs that are secondary (non-preferred) language
+    versions of a submission for which a preferred-language version exists.
+
+    Some countries (Canada, Switzerland) submit the same CBM year in multiple
+    languages (e.g. English + French, or German + French + English).  Script 04
+    processes every downloaded document independently, so the same facilities
+    are extracted once per language version.  When these near-identical records
+    are fed into entity resolution, the slightly different translated names
+    produce spurious separate canonical entities (e.g. CAN_003/004 for the NML
+    alongside CAN_001; CHE_007 "Labor Spiez" alongside CHE_001 "Spiez
+    Laboratory").
+
+    Strategy: for each (country_iso3, year) pair that has > 1 document, elect
+    one as primary — preferring the English document; if none is English, the
+    lexicographically first ID wins.  All others are marked secondary and
+    excluded from facility loading, so entity resolution sees only one set of
+    names per submission.
+    """
+    from collections import defaultdict
+
+    by_country_year: dict[tuple, list[dict]] = defaultdict(list)
+    for entry in catalogue:
+        if entry.get("is_amendment") or not entry.get("downloaded"):
+            continue
+        key = (entry.get("country_iso3"), entry.get("year"))
+        by_country_year[key].append(entry)
+
+    secondary: set[str] = set()
+    for entries in by_country_year.values():
+        if len(entries) <= 1:
+            continue
+        english = [e for e in entries if e.get("language") == "en"]
+        # Prefer English; fall back to alphabetically first ID
+        primary_id = sorted(english or entries, key=lambda e: e["id"])[0]["id"]
+        for entry in entries:
+            if entry["id"] != primary_id:
+                secondary.add(entry["id"])
+
+    if secondary:
+        log.info(
+            "Bilingual deduplication: skipping %d secondary-language source IDs: %s",
+            len(secondary), sorted(secondary),
+        )
+    return secondary
+
+
+def load_all_facilities(secondary_ids: set[str] | None = None) -> list[dict]:
+    """Return a flat list of all facility dicts from every structured JSON.
+
+    secondary_ids: if provided, records whose source_id is in this set are
+    skipped.  Used to avoid loading the same facilities twice when a country
+    submitted the same CBM year in multiple languages (see
+    get_secondary_source_ids).
+    """
     records: list[dict] = []
     for path in sorted(STRUCTURED_DIR.glob("*_form_a1.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
-        records.extend(data.get("facilities", []))
+        for fac in data.get("facilities", []):
+            src = (fac.get("extraction_metadata") or {}).get("source_id", "")
+            if secondary_ids and src in secondary_ids:
+                continue  # duplicate language version — prefer the English doc
+            records.append(fac)
     return records
 
 
-def load_all_vaccine_facilities() -> list[dict]:
-    """Return a flat list of all vaccine facility dicts from every Form G JSON."""
+def load_all_vaccine_facilities(secondary_ids: set[str] | None = None) -> list[dict]:
+    """Return a flat list of all vaccine facility dicts from every Form G JSON.
+
+    secondary_ids: same bilingual deduplication as load_all_facilities.
+    """
     records: list[dict] = []
     for path in sorted(STRUCTURED_DIR.glob("*_form_g.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
-        records.extend(data.get("vaccine_facilities", []))
+        for fac in data.get("vaccine_facilities", []):
+            src = (fac.get("extraction_metadata") or {}).get("source_id", "")
+            if secondary_ids and src in secondary_ids:
+                continue  # duplicate language version — prefer the English doc
+            records.append(fac)
     return records
 
 
 # ── Form A Part 2 loaders ────────────────────────────────────────────────────
 
 
-def load_all_defence_programmes() -> list[dict]:
-    """Return a flat list of all defence programme dicts from Form A Part 2 JSONs."""
+def load_all_defence_programmes(secondary_ids: set[str] | None = None) -> list[dict]:
+    """Return a flat list of all defence programme dicts from Form A Part 2 JSONs.
+
+    secondary_ids: same bilingual deduplication as load_all_facilities.
+    """
     records: list[dict] = []
     for path in sorted(STRUCTURED_DIR.glob("*_form_a2.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
-        records.extend(data.get("defence_programmes", []))
+        for prog in data.get("defence_programmes", []):
+            src = (prog.get("extraction_metadata") or {}).get("source_id", "")
+            if secondary_ids and src in secondary_ids:
+                continue  # duplicate language version — prefer the English doc
+            records.append(prog)
     return records
 
 
-def load_all_defence_facilities() -> list[dict]:
-    """Return a flat list of all defence facility dicts from Form A Part 2 JSONs."""
+def load_all_defence_facilities(secondary_ids: set[str] | None = None) -> list[dict]:
+    """Return a flat list of all defence facility dicts from Form A Part 2 JSONs.
+
+    secondary_ids: same bilingual deduplication as load_all_facilities.
+    """
     records: list[dict] = []
     for path in sorted(STRUCTURED_DIR.glob("*_form_a2.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
-        records.extend(data.get("defence_facilities", []))
+        for fac in data.get("defence_facilities", []):
+            src = (fac.get("extraction_metadata") or {}).get("source_id", "")
+            if secondary_ids and src in secondary_ids:
+                continue  # duplicate language version — prefer the English doc
+            records.append(fac)
     return records
 
 
@@ -404,8 +503,31 @@ def resolve_entities(records: list[dict]) -> dict[int, str]:
                 ib, nb = names[b]
                 if not na or not nb:
                     continue
-                if fuzz.token_sort_ratio(na, nb) >= SIMILARITY_THRESHOLD:
+                # Records from the same year are from the same CBM submission and are
+                # therefore guaranteed to be different facilities.  Use a much higher
+                # threshold so that only near-identical names (abbreviation vs full form)
+                # are merged within a single year, preventing false merges like the five
+                # "State Public Health Laboratory of X State, Ministry of Health" entries
+                # from Mexico 2021, or four Universiti Malaysia Sabah sub-labs in 2011.
+                ya = (records[ia].get("extraction_metadata") or {}).get("year")
+                yb = (records[ib].get("extraction_metadata") or {}).get("year")
+                threshold = SAME_YEAR_THRESHOLD if (ya and yb and ya == yb) else SIMILARITY_THRESHOLD
+                if fuzz.token_sort_ratio(na, nb) >= threshold:
                     uf.union(ia, ib)
+
+    # Anchor-merge pass: force-merge all records whose names contain a given
+    # anchor string (see ANCHOR_MERGES).  Handles labs whose formal name grows or
+    # shrinks with institutional context across years, causing the token_sort_ratio
+    # to fall below the similarity threshold even though the lab is the same.
+    for anchor_country, anchor in ANCHOR_MERGES:
+        anchor_lower = anchor.lower()
+        indices = by_country.get(anchor_country, [])
+        matched = [
+            i for i in indices
+            if anchor_lower in (records[i].get("facility_name") or "").lower()
+        ]
+        for i in matched[1:]:
+            uf.union(matched[0], i)
 
     # Group by country → root → member indices
     country_groups: dict[str, dict[int, list[int]]] = defaultdict(
@@ -629,12 +751,17 @@ def build_summary_stats(
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    log.info("Loading structured records from %s …", STRUCTURED_DIR)
-    records = load_all_facilities()
-    log.info("Loaded %d facility-year records", len(records))
-
     catalogue = load_catalogue()
     cat_index = {e["id"]: e.get("language", "en") for e in catalogue}
+
+    # Skip secondary-language versions of bilingual submissions (Canada EN+FR,
+    # Switzerland DE/FR/EN) so entity resolution does not create spurious duplicates
+    # from translated facility names (see get_secondary_source_ids for details).
+    secondary_ids = get_secondary_source_ids(catalogue)
+
+    log.info("Loading structured records from %s …", STRUCTURED_DIR)
+    records = load_all_facilities(secondary_ids=secondary_ids)
+    log.info("Loaded %d facility-year records", len(records))
 
     log.info("Resolving entities (threshold=%d)…", SIMILARITY_THRESHOLD)
     id_map = resolve_entities(records)
@@ -670,7 +797,7 @@ def main() -> None:
     log.info("Wrote %s (%d entities)", reg_path, len(registry))
 
     # ── vaccine facilities (Form G) ───────────────────────────────────────────
-    vaccine_records = load_all_vaccine_facilities()
+    vaccine_records = load_all_vaccine_facilities(secondary_ids=secondary_ids)
     vaccine_flat: list[dict] | None = None
     if vaccine_records:
         log.info("Loaded %d vaccine facility-year records (Form G)", len(vaccine_records))
@@ -693,8 +820,8 @@ def main() -> None:
         log.info("No Form G data found; skipping vaccine facility outputs")
 
     # ── Form A Part 2: defence programmes and facilities ──────────────────────
-    defence_programmes = load_all_defence_programmes()
-    defence_facilities = load_all_defence_facilities()
+    defence_programmes = load_all_defence_programmes(secondary_ids=secondary_ids)
+    defence_facilities = load_all_defence_facilities(secondary_ids=secondary_ids)
     if defence_programmes or defence_facilities:
         log.info("Loaded %d defence programmes, %d defence facilities (Form A Part 2)",
                  len(defence_programmes), len(defence_facilities))
