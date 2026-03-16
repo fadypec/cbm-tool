@@ -185,6 +185,186 @@ def api_country(iso3: str):
     })
 
 
+# ── /api/country/{iso3}/defence ──────────────────────────────────────────────
+
+@app.get("/api/country/{iso3}/defence", summary="Defence programmes and facilities for one country")
+def api_country_defence(iso3: str):
+    iso3 = iso3.upper()
+    with cursor() as cur:
+        cur.execute("""
+            SELECT year, programme_name, responsible_org, objectives_summary,
+                   research_areas, total_funding_amount, total_funding_currency,
+                   uses_contractors, contractor_proportion_pct, confidence
+            FROM defence_programmes
+            WHERE country_iso3 = %s
+            ORDER BY year DESC
+        """, (iso3,))
+        programmes = [dict(r) for r in cur.fetchall()]
+
+        # Canonical entity summary (one row per unique facility)
+        cur.execute("""
+            SELECT
+                d.canonical_defence_facility_id AS canonical_id,
+                (SELECT df2.facility_name
+                 FROM defence_facilities df2
+                 WHERE df2.canonical_defence_facility_id = d.canonical_defence_facility_id
+                 ORDER BY df2.year DESC LIMIT 1) AS canonical_name,
+                MIN(d.year) AS first_year,
+                MAX(d.year) AS last_year,
+                BOOL_OR(d.bsl4_area_m2 IS NOT NULL AND d.bsl4_area_m2 > 0) AS has_bsl4,
+                BOOL_OR(d.bsl3_area_m2 IS NOT NULL AND d.bsl3_area_m2 > 0) AS has_bsl3
+            FROM defence_facilities d
+            WHERE d.country_iso3 = %s
+              AND d.canonical_defence_facility_id IS NOT NULL
+            GROUP BY d.canonical_defence_facility_id
+            ORDER BY canonical_name
+        """, (iso3,))
+        entities = [dict(r) for r in cur.fetchall()]
+
+        # All year records (for detail within the entity modal)
+        cur.execute("""
+            SELECT year, canonical_defence_facility_id, facility_name,
+                   city, address, bsl2_area_m2, bsl3_area_m2, bsl4_area_m2,
+                   total_lab_area_m2, personnel_total, personnel_military,
+                   personnel_civilian, mod_funded, work_description, confidence
+            FROM defence_facilities
+            WHERE country_iso3 = %s
+            ORDER BY year DESC, facility_name
+        """, (iso3,))
+        records = [dict(r) for r in cur.fetchall()]
+
+    return _json({"programmes": programmes, "entities": entities, "records": records})
+
+
+# ── /api/entity/defence/{id} ──────────────────────────────────────────────────
+
+@app.get("/api/entity/defence/{entity_id}", summary="Full history for one canonical defence facility")
+def api_defence_entity(entity_id: str):
+    with cursor() as cur:
+        cur.execute("""
+            SELECT
+                df.canonical_defence_facility_id,
+                (SELECT df2.facility_name FROM defence_facilities df2
+                 WHERE df2.canonical_defence_facility_id = df.canonical_defence_facility_id
+                 ORDER BY df2.year DESC LIMIT 1) AS canonical_name,
+                df.country_iso3,
+                (SELECT d.country_name FROM documents d
+                 WHERE d.country_iso3 = df.country_iso3
+                 AND d.country_name IS NOT NULL LIMIT 1) AS country_name,
+                array_agg(DISTINCT df.facility_name ORDER BY df.facility_name)
+                    FILTER (WHERE df.facility_name IS NOT NULL) AS all_names,
+                MIN(df.year) AS first_year,
+                MAX(df.year) AS last_year
+            FROM defence_facilities df
+            WHERE df.canonical_defence_facility_id = %s
+            GROUP BY df.canonical_defence_facility_id, df.country_iso3
+        """, (entity_id,))
+        entity = cur.fetchone()
+        if not entity:
+            raise HTTPException(status_code=404, detail=f"Defence entity '{entity_id}' not found")
+        entity = dict(entity)
+
+        cur.execute("""
+            SELECT df.year, df.facility_name, df.city, df.address,
+                   df.bsl2_area_m2, df.bsl3_area_m2, df.bsl4_area_m2, df.total_lab_area_m2,
+                   df.personnel_total, df.personnel_military, df.personnel_civilian,
+                   df.personnel_scientists, df.personnel_engineers, df.personnel_technicians,
+                   df.personnel_admin, df.mod_funded, df.work_description,
+                   df.funding_source, df.funding_research, df.funding_development,
+                   df.funding_te, df.funding_currency, df.confidence, df.geocode_confidence,
+                   d.source_url
+            FROM defence_facilities df
+            JOIN documents d ON d.id = df.document_id
+            WHERE df.canonical_defence_facility_id = %s
+            ORDER BY df.year DESC
+        """, (entity_id,))
+        entity["year_records"] = [dict(r) for r in cur.fetchall()]
+
+    return _json(entity)
+
+
+# ── /api/country/{iso3}/vaccine ───────────────────────────────────────────────
+
+@app.get("/api/country/{iso3}/vaccine", summary="Vaccine facilities for one country")
+def api_country_vaccine(iso3: str):
+    iso3 = iso3.upper()
+    with cursor() as cur:
+        cur.execute("""
+            SELECT vf.id AS canonical_id, vf.canonical_name,
+                   vf.first_year, vf.last_year
+            FROM vaccine_facilities vf
+            WHERE vf.country_iso3 = %s
+            ORDER BY vf.canonical_name
+        """, (iso3,))
+        entities = [dict(r) for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT year, canonical_vaccine_facility_id, facility_name,
+                   city, address, diseases_covered, vaccines_summary, confidence
+            FROM vaccine_facility_years
+            WHERE country_iso3 = %s
+            ORDER BY year DESC, facility_name
+        """, (iso3,))
+        records = [dict(r) for r in cur.fetchall()]
+
+    return _json({"entities": entities, "records": records})
+
+
+# ── /api/country/{iso3}/legislation ──────────────────────────────────────────
+
+@app.get("/api/country/{iso3}/legislation", summary="Biosafety legislation history for one country")
+def api_country_legislation(iso3: str):
+    iso3 = iso3.upper()
+    with cursor() as cur:
+        cur.execute("""
+            SELECT year,
+                   prohibitions_legislation, prohibitions_regulations,
+                   prohibitions_other_measures, prohibitions_amended,
+                   exports_legislation, exports_regulations,
+                   exports_other_measures, exports_amended,
+                   imports_legislation, imports_regulations,
+                   imports_other_measures, imports_amended,
+                   biosafety_legislation, biosafety_regulations,
+                   biosafety_other_measures, biosafety_amended,
+                   key_laws, notes, confidence, document_id
+            FROM legislation
+            WHERE country_iso3 = %s
+            ORDER BY year DESC
+        """, (iso3,))
+        records = [dict(r) for r in cur.fetchall()]
+        # Attach source URL
+        for rec in records:
+            cur.execute("SELECT source_url FROM documents WHERE id = %s", (rec["document_id"],))
+            row = cur.fetchone()
+            rec["source_url"] = row["source_url"] if row else None
+
+    return _json(records)
+
+
+# ── /api/country/{iso3}/past-programmes ──────────────────────────────────────
+
+@app.get("/api/country/{iso3}/past-programmes", summary="Past offensive/defensive programme declarations for one country")
+def api_country_past_programmes(iso3: str):
+    iso3 = iso3.upper()
+    with cursor() as cur:
+        cur.execute("""
+            SELECT year, convention_entry_date,
+                   has_offensive_programme, offensive_period, offensive_summary,
+                   has_defensive_programme, defensive_period, defensive_summary,
+                   confidence, notes, document_id
+            FROM past_programmes
+            WHERE country_iso3 = %s
+            ORDER BY year DESC
+        """, (iso3,))
+        records = [dict(r) for r in cur.fetchall()]
+        for rec in records:
+            cur.execute("SELECT source_url FROM documents WHERE id = %s", (rec["document_id"],))
+            row = cur.fetchone()
+            rec["source_url"] = row["source_url"] if row else None
+
+    return _json(records)
+
+
 # ── /api/map/facilities ───────────────────────────────────────────────────────
 
 @app.get("/api/map/facilities", summary="GeoJSON: all geocoded Form A1 facility-year records")
@@ -284,21 +464,23 @@ def api_map_defence():
 def api_map_vaccines():
     with cursor() as cur:
         cur.execute("""
-            SELECT
-                vf.id,
-                vf.facility_name                              AS name,
-                vf.country_iso3,
-                vf.year,
-                vf.city,
-                vf.geocode_confidence,
-                ST_X(vf.geom)                                 AS lon,
-                ST_Y(vf.geom)                                 AS lat,
+            SELECT DISTINCT ON (vfy.canonical_vaccine_facility_id, vfy.year)
+                vfy.canonical_vaccine_facility_id             AS id,
+                COALESCE(vf.canonical_name, vfy.facility_name) AS name,
+                vfy.country_iso3,
+                vfy.year,
+                vfy.city,
+                vfy.geocode_confidence,
+                ST_X(vfy.geom)                                AS lon,
+                ST_Y(vfy.geom)                                AS lat,
                 (SELECT country_name FROM documents
-                 WHERE  country_iso3 = vf.country_iso3
+                 WHERE  country_iso3 = vfy.country_iso3
                  AND    country_name IS NOT NULL LIMIT 1)     AS country_name
-            FROM vaccine_facility_years vf
-            WHERE vf.geom IS NOT NULL
-            ORDER BY vf.year, vf.country_iso3
+            FROM vaccine_facility_years vfy
+            LEFT JOIN vaccine_facilities vf
+                   ON vf.id = vfy.canonical_vaccine_facility_id
+            WHERE vfy.geom IS NOT NULL
+            ORDER BY vfy.canonical_vaccine_facility_id, vfy.year, vfy.document_id
         """)
         rows = cur.fetchall()
 
@@ -354,11 +536,12 @@ def api_search(q: str = Query(default="", min_length=2, description="Substring t
         like = f"%{q}%"
         cur.execute("""
             SELECT
-                f.canonical_facility_id,
-                f.canonical_name,
+                f.canonical_facility_id        AS id,
+                f.canonical_name               AS name,
                 f.country_iso3,
                 f.latest_containment,
                 f.years_declared,
+                'A1'                           AS layer,
                 (SELECT country_name FROM documents
                  WHERE  country_iso3 = f.country_iso3
                  AND    country_name IS NOT NULL LIMIT 1) AS country_name
@@ -368,9 +551,35 @@ def api_search(q: str = Query(default="", min_length=2, description="Substring t
                    SELECT 1 FROM unnest(f.all_names) AS n(name)
                    WHERE n.name ILIKE %s
                )
-            ORDER BY f.canonical_name NULLS LAST
+            UNION ALL
+            SELECT
+                vf.id::text                    AS id,
+                vf.canonical_name              AS name,
+                vf.country_iso3,
+                NULL                           AS latest_containment,
+                ARRAY(SELECT generate_series(vf.first_year::int, vf.last_year::int)) AS years_declared,
+                'G'                            AS layer,
+                (SELECT country_name FROM documents
+                 WHERE  country_iso3 = vf.country_iso3
+                 AND    country_name IS NOT NULL LIMIT 1) AS country_name
+            FROM vaccine_facilities vf
+            WHERE vf.canonical_name ILIKE %s
+            UNION ALL
+            SELECT DISTINCT ON (df.country_iso3, df.facility_name)
+                NULL                           AS id,
+                df.facility_name               AS name,
+                df.country_iso3,
+                NULL                           AS latest_containment,
+                NULL                           AS years_declared,
+                'A2'                           AS layer,
+                (SELECT country_name FROM documents
+                 WHERE  country_iso3 = df.country_iso3
+                 AND    country_name IS NOT NULL LIMIT 1) AS country_name
+            FROM defence_facilities df
+            WHERE df.facility_name ILIKE %s
+            ORDER BY name NULLS LAST
             LIMIT 20
-        """, (like, like))
+        """, (like, like, like, like))
         return _json([dict(r) for r in cur.fetchall()])
 
 
@@ -415,8 +624,10 @@ def api_entity(entity_id: str):
                 fy.agents_summary,
                 fy.mod_funded,
                 fy.confidence,
-                fy.geocode_confidence
+                fy.geocode_confidence,
+                d.source_url
             FROM facility_years fy
+            JOIN documents d ON d.id = fy.document_id
             WHERE fy.canonical_facility_id = %s
             ORDER BY fy.year DESC
         """, (entity_id,))

@@ -161,10 +161,13 @@ do not infer from the row label alone
 - Funding sources: split on conjunctions including English "and", Portuguese "e", and \
 Spanish "y" when they join distinct organisation names; each organisation should be a \
 separate entry in the sources list
-- If Form A part 1(i) fields 1–7 are all blank but part 1(ii) declares a containment \
-level, create one facility record with facility_name="[Unnamed facility]", populate \
-has_bsl3/highest_containment from the declared level, and note in "notes" that the \
-facility name was not declared
+- If Form A part 1(i) fields 1–7 are all blank/NA but part 1(ii) includes an "additional \
+relevant information" section that lists named facilities (e.g. Bolivia and Mexico \
+voluntarily list BSL-3 labs there), extract EACH named facility as a separate record \
+using whatever name, address, and containment data appear in that section. Set \
+has_bsl3=true and highest_containment="BSL-3" for each unless otherwise specified. \
+Only if NO named facilities can be found anywhere in the document should you create \
+one record with facility_name="[Unnamed facility]"
 - Translation: if the document language is not English (indicated in the context header), \
 translate all extracted field values to English. Set translated=true. Preserve the \
 original non-English text in facility_name_original and responsible_organisation_original. \
@@ -304,6 +307,25 @@ Return ONLY valid JSON, no preamble:
 Rules:
 - categories: read directly from the Yes/No table; use null if a cell is blank or \
 illegible
+- IMPORTANT — "Yes/No" template issue: some countries submit the form with typographic \
+emphasis (underline, bold) to mark their selections; plain text extraction loses this \
+formatting and the table appears to show only the unmodified template text "Yes/No" in \
+every cell. When the table shows only this template text without any filled-in responses, \
+do NOT default all values to null. Instead infer correct values from the surrounding \
+narrative text and listed legislation: \
+  (1) legislation=true for a category if a specific law or act addresses it; \
+  (2) regulations=true if a government decree or regulation addresses it; \
+  (3) other_measures=true if a standard, guideline, or other non-legislative measure does; \
+  (4) category mapping: BWC/biological weapons prohibition laws → prohibitions; \
+      export/import controls, dual-use trade laws → exports AND imports (unless context \
+      indicates only one applies); biosafety standards, infectious disease laws, \
+      biosecurity guidance → biosafety; \
+  (5) amended=true only if text explicitly mentions a recent change or new amendment; \
+  (6) if narrative sections are explicitly labelled "(a)", "(b)", "(c)", "(d)" matching \
+      the form rows, use those labels directly; otherwise infer from keywords; \
+  (7) if the narrative describes a comprehensive framework covering all four categories, \
+      set all applicable fields to true; \
+  (8) only leave a field null if genuinely no indication exists in either the table or narrative
 - "Nothing to declare" → set all category fields to null, key_laws to []
 - key_laws: list the short names (e.g. "Penal Code Art. 140-1", \
 "Biosafety Act 2015") — omit URLs, omit the BWC itself

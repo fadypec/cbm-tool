@@ -183,6 +183,31 @@ def load_facility_years(cur) -> int:
     return len(rows)
 
 
+def load_vaccine_facilities(cur) -> int:
+    path = OUTPUT_DIR / "vaccine_entity_registry.json"
+    if not path.exists():
+        log.warning("vaccine_entity_registry.json not found; skipping vaccine_facilities")
+        return 0
+    registry = json.loads(path.read_text(encoding="utf-8"))
+    years_list = [r.get("years_declared") or [] for r in registry]
+    rows = [
+        (
+            r["canonical_vaccine_facility_id"],
+            r.get("country_iso3"),
+            _str(r.get("canonical_name")),
+            min(yl) if (yl := r.get("years_declared") or []) else None,
+            max(yl) if yl else None,
+        )
+        for r in registry
+    ]
+    psycopg2.extras.execute_batch(cur, """
+        INSERT INTO vaccine_facilities (id, country_iso3, canonical_name, first_year, last_year)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO NOTHING
+    """, rows)
+    return len(rows)
+
+
 def load_vaccine_facility_years(cur) -> int:
     path = OUTPUT_DIR / "all_vaccine_facilities.csv"
     if not path.exists():
@@ -192,6 +217,7 @@ def load_vaccine_facility_years(cur) -> int:
     with path.open(encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
             rows.append((
+                _str(r.get("canonical_vaccine_facility_id")),
                 r["source_document"],
                 r["country_iso3"],
                 _int(r["year"]),
@@ -205,10 +231,10 @@ def load_vaccine_facility_years(cur) -> int:
             ))
     psycopg2.extras.execute_batch(cur, """
         INSERT INTO vaccine_facility_years
-            (document_id, country_iso3, year, facility_name,
-             city, address, diseases_covered, vaccines_summary,
+            (canonical_vaccine_facility_id, document_id, country_iso3, year,
+             facility_name, city, address, diseases_covered, vaccines_summary,
              confidence, translated)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, rows)
     return len(rows)
 
@@ -283,6 +309,7 @@ def load_defence_facilities(cur) -> int:
                 _str(r["work_description"]),
                 _float(r["confidence"]),
                 _bool(r["translated"]),
+                _str(r.get("canonical_defence_facility_id")),
             ))
     psycopg2.extras.execute_batch(cur, """
         INSERT INTO defence_facilities
@@ -292,8 +319,8 @@ def load_defence_facilities(cur) -> int:
              personnel_scientists, personnel_engineers, personnel_technicians,
              personnel_admin, mod_funded, funding_source,
              funding_research, funding_development, funding_te, funding_currency,
-             work_description, confidence, translated)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+             work_description, confidence, translated, canonical_defence_facility_id)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, rows)
     return len(rows)
 
@@ -406,15 +433,16 @@ def load_form_compliance(cur) -> int:
 
 # Order matters: parent tables before child tables (FK constraints)
 ALL_TABLES = [
-    ("documents",             load_documents,            True),   # True = needs catalogue arg
-    ("facilities",            load_facilities,           False),
-    ("facility_years",        load_facility_years,       False),
-    ("vaccine_facility_years",load_vaccine_facility_years,False),
-    ("defence_programmes",    load_defence_programmes,   False),
-    ("defence_facilities",    load_defence_facilities,   False),
-    ("past_programmes",       load_past_programmes,      False),
-    ("legislation",           load_legislation,          False),
-    ("form_compliance",       load_form_compliance,      False),
+    ("documents",              load_documents,             True),   # True = needs catalogue arg
+    ("facilities",             load_facilities,            False),
+    ("facility_years",         load_facility_years,        False),
+    ("vaccine_facilities",     load_vaccine_facilities,    False),
+    ("vaccine_facility_years", load_vaccine_facility_years,False),
+    ("defence_programmes",     load_defence_programmes,    False),
+    ("defence_facilities",     load_defence_facilities,    False),
+    ("past_programmes",        load_past_programmes,       False),
+    ("legislation",            load_legislation,           False),
+    ("form_compliance",        load_form_compliance,       False),
 ]
 
 # Tables that depend on documents (to truncate in reverse FK order)
@@ -425,6 +453,7 @@ TRUNCATE_ORDER = [
     "defence_facilities",
     "defence_programmes",
     "vaccine_facility_years",
+    "vaccine_facilities",
     "facility_years",
     "facilities",
     "documents",
@@ -494,6 +523,16 @@ def main() -> None:
                 df_geom = cur.fetchall()
                 log.info("  Saved %d defence_facilities geom rows", len(df_geom))
 
+                cur.execute("""
+                    SELECT vfy.document_id,
+                           vfy.facility_name,
+                           vfy.geom, vfy.geocode_source, vfy.geocode_confidence
+                    FROM   vaccine_facility_years vfy
+                    WHERE  vfy.geom IS NOT NULL
+                """)
+                vfy_geom = cur.fetchall()
+                log.info("  Saved %d vaccine_facility_years geom rows", len(vfy_geom))
+
                 log.info("Truncating all tables …")
                 cur.execute(
                     "TRUNCATE TABLE " + ", ".join(TRUNCATE_ORDER) + " CASCADE"
@@ -516,6 +555,23 @@ def main() -> None:
                         for row in fy_geom
                     ])
                     log.info("  Restored %d facility_years geom", len(fy_geom))
+
+                # Restore geocoded geometry for vaccine_facility_years
+                # Key on (document_id, facility_name) — canonical_vaccine_facility_id
+                # may be NULL if geocoding ran before entity resolution.
+                if vfy_geom:
+                    psycopg2.extras.execute_batch(cur, """
+                        UPDATE vaccine_facility_years
+                        SET    geom               = %s,
+                               geocode_source     = %s,
+                               geocode_confidence = %s
+                        WHERE  document_id   = %s
+                        AND    facility_name = %s
+                    """, [
+                        (row[2], row[3], row[4], row[0], row[1])
+                        for row in vfy_geom
+                    ])
+                    log.info("  Restored %d vaccine_facility_years geom", len(vfy_geom))
 
                 # Restore geocoded geometry for defence_facilities
                 if df_geom:

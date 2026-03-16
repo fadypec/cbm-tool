@@ -53,6 +53,8 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 
 #search-input::placeholder { color: #5060a0; }
 #search-input:focus { border-color: #4a8ad4; }
+#search-input.searching { border-color: #6878b8; background: #1e2130; }
+#search-input.searching::placeholder { color: #6878b8; }
 
 #search-results {
     position: absolute;
@@ -138,6 +140,101 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 .side-section { padding: 12px 16px; border-bottom: 1px solid #1e2030; }
 .side-section-label { color: #4a5280; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; margin-bottom: 8px; }
 
+/* ── Detail panel tabs ──────────────────────────────────────────────────── */
+#detail-tabs {
+    display: flex;
+    flex-shrink: 0;
+    background: #0e1020;
+    border-bottom: 1px solid #252535;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+#detail-tabs::-webkit-scrollbar { display: none; }
+
+.dtab {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #5060a0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 8px 10px;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+    white-space: nowrap;
+}
+.dtab:hover { color: #c0ccf0; }
+.dtab.active { color: #c0ccf0; border-bottom-color: #4a8ad4; }
+
+.tab-pane { height: 100%; }
+
+#detail-content {
+    display: flex !important;
+    flex: 1;
+    overflow: hidden;
+    flex-direction: column;
+}
+
+/* ── Defence tab ────────────────────────────────────────────────────────── */
+/* ── Defence sub-tab bar ────────────────────────────────────────────────── */
+#defence-subtab-bar {
+    display: flex;
+    flex-shrink: 0;
+    background: #0b0d1a;
+    border-bottom: 1px solid #1e2030;
+}
+
+.dsubtab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #4a5280;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+}
+.dsubtab:hover { color: #a0b0d8; }
+.dsubtab.active { color: #a0b0d8; border-bottom-color: #8b1a1a; }
+
+.def-prog { padding: 10px 16px; border-bottom: 1px solid #1e2030; }
+.def-prog-name { color: #c0ccf0; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.def-prog-org  { color: #4a5280; font-size: 11px; margin-bottom: 4px; }
+.def-prog-obj  { color: #8090b8; font-size: 11px; line-height: 1.5; }
+.def-fac-item  { padding: 8px 16px; border-bottom: 1px solid #1a1c2c; }
+.def-fac-name  { color: #b0bcde; font-size: 12px; font-weight: 500; }
+.def-fac-meta  { color: #404870; font-size: 11px; margin-top: 2px; }
+
+/* ── Vaccine tab ────────────────────────────────────────────────────────── */
+.vac-item      { padding: 9px 16px; border-bottom: 1px solid #1a1c2c; cursor: pointer; transition: background 0.12s; }
+.vac-item:hover { background: #1c1f35; }
+.vac-name      { color: #b0bcde; font-size: 12px; font-weight: 500; }
+.vac-meta      { color: #404870; font-size: 11px; margin-top: 2px; }
+
+/* ── Legislation tab ────────────────────────────────────────────────────── */
+.leg-year-block { padding: 10px 16px; border-bottom: 1px solid #1e2030; }
+.leg-year-head  { color: #c0ccf0; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.leg-table      { width: 100%; border-collapse: collapse; font-size: 11px; }
+.leg-table td   { padding: 2px 4px; vertical-align: top; }
+.leg-table td:first-child { color: #5060a0; width: 80px; }
+.leg-table td:not(:first-child) { color: #8090b8; }
+.leg-yn-yes     { color: #1e7e45 !important; font-weight: 600; }
+.leg-yn-no      { color: #7a4010 !important; }
+.leg-laws       { color: #6878a8; font-size: 10px; margin-top: 4px; font-style: italic; }
+
+/* ── History (Form F) tab ───────────────────────────────────────────────── */
+.hist-item      { padding: 10px 16px; border-bottom: 1px solid #1e2030; }
+.hist-year      { color: #c0ccf0; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.hist-badge     { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; margin-right: 4px; }
+.hist-offensive { background: #5a1010; color: #e08080; }
+.hist-defensive { background: #0a3a5a; color: #80c0e0; }
+.hist-none      { background: #1e2030; color: #5060a0; }
+.hist-summary   { color: #7080a0; font-size: 11px; margin-top: 4px; line-height: 1.5; }
+
 /* ── Country list ───────────────────────────────────────────────────────── */
 .country-item { padding: 10px 16px; border-bottom: 1px solid #1a1c2c; cursor: pointer; transition: background 0.12s; }
 .country-item:hover  { background: #1c1f35; }
@@ -161,6 +258,7 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 .td-sub { background: #1e7e45; }
 .td-ntd { background: #7a4010; }
 .td-abs { background: #1c1e2e; }
+.td-ltd { background: #8b6914; }
 
 /* ── Facility list in sidebar ───────────────────────────────────────────── */
 .fac-item { padding: 9px 16px; border-bottom: 1px solid #1a1c2c; cursor: pointer; transition: background 0.12s; }
@@ -354,8 +452,89 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 .yr-kv dt { color: #777; font-weight: normal; margin: 0; }
 .yr-kv dd { color: #222; margin: 0; word-break: break-word; }
 
+/* ── About modal headings ───────────────────────────────────────────────── */
+.about-heading {
+    font-weight: 700;
+    font-size: 13px;
+    color: #1a1e40;
+    margin-top: 1.4em;
+    margin-bottom: 0.4em;
+    padding-bottom: 3px;
+    border-bottom: 1px solid #e0e4ef;
+}
+
+/* ── Choropleth tooltip ─────────────────────────────────────────────────── */
+.choro-tip {
+    background: rgba(255,255,255,0.97);
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    padding: 5px 10px;
+    font-size: 12px;
+    pointer-events: none;
+    white-space: nowrap;
+}
+.choro-tip strong { color: #1a1e40; }
+
+/* ── Legend hatch swatch ────────────────────────────────────────────────── */
+.legend-hatch {
+    background: repeating-linear-gradient(
+        -45deg,
+        #ccc,
+        #ccc 1px,
+        #fff 1px,
+        #fff 4px
+    );
+    border-color: #bbb;
+}
+
 /* ── Remove browser focus outline on Leaflet SVG paths ─────────────────── */
 .leaflet-interactive:focus { outline: none; }
+
+/* ── Detail subtitle ────────────────────────────────────────────────────── */
+.detail-subtitle { color: #4a5280; font-size: 11px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Year play button ───────────────────────────────────────────────────── */
+.fp-play-btn {
+    flex-shrink: 0;
+    width: 26px; height: 26px;
+    padding: 0;
+    background: #eef1fa;
+    border: 1px solid #c8d0e8;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #2a3060;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+}
+.fp-play-btn:hover:not(:disabled) { background: #dde2f8; }
+.fp-play-btn:disabled { color: #a0a8c0; cursor: default; }
+.fp-play-btn.playing { background: #fde8d0; border-color: #e0a070; color: #8b3a00; }
+
+/* ── Search active result (keyboard nav) ────────────────────────────────── */
+#search-results li.sr-active { background: #252840; }
+
+/* ── Text overflow for all list name fields ─────────────────────────────── */
+.fac-name, .vac-name, .def-fac-name, .def-prog-name, .country-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── Global compliance table ────────────────────────────────────────────── */
+.gt-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.gt-table thead tr { background: #f5f6fa; border-bottom: 2px solid #dde2f0; position: sticky; top: 0; z-index: 1; }
+.gt-table th { padding: 10px 14px; text-align: left; font-size: 11px; font-weight: 700; color: #555; letter-spacing: 0.05em; white-space: nowrap; }
+.gt-th-sort { cursor: pointer; user-select: none; }
+.gt-th-sort:hover { background: #e8eaf8; }
+.gt-th-sort.gt-sorted { color: #1a2060; }
+.gt-row { cursor: pointer; border-bottom: 1px solid #eef0f8; transition: background 0.1s; }
+.gt-row:hover { background: #f0f4ff; }
+.gt-row td { padding: 8px 14px; color: #222; }
+.gt-rate { display: inline-block; padding: 1px 7px; border-radius: 3px; font-size: 11px; font-weight: 600; color: #fff; min-width: 38px; text-align: center; }
+.gt-rate-none { background: #e0e0e8; color: #666; }
 
 /* ── Scrollbars ─────────────────────────────────────────────────────────── */
 .side-scroll::-webkit-scrollbar { width: 4px; }

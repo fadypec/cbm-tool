@@ -7,6 +7,10 @@ const RESTRICTED = new Set(['CHN', 'FRA', 'RUS', 'IND']);
 // This GeoJSON dataset gives France ISO code '-99'; match by name as fallback
 const RESTRICTED_NAMES = new Set(['France']);
 
+// BWC membership status (as of 2025: 189 states parties)
+const BWC_SIGNATORIES = new Set(['EGY', 'HTI', 'SOM', 'SYR']);
+const BWC_NON_PARTIES = new Set(['TCD', 'COM', 'DJI', 'ERI', 'ISR', 'FSM', 'NAM', 'SSD', 'TUV']);
+
 // ── State ──────────────────────────────────────────────────────────────────
 
 const STATE = {
@@ -31,6 +35,10 @@ let complianceRates = {};   // iso3 → {a1_rate, submission_count}
 let entityModal   = null;
 let filterCollapsed = false;
 let searchTimer   = null;
+let _countriesData  = [];   // full /api/countries response, for global table
+let _playInterval   = null; // year animation interval
+let _hashTimer      = null; // debounce for history.replaceState
+let _tableSort      = { col: 'submission_count', dir: 'desc' };
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────
 
@@ -55,6 +63,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         initYearSlider(stats.year_min, stats.year_max);
 
         compliance.forEach(c => { complianceRates[c.country_iso3] = c; });
+        _countriesData = countries;
         renderCountryList(countries);
 
         DATA.A1 = a1;
@@ -240,6 +249,7 @@ function toggleSidebar() {
     const collapsed = sidebar.classList.toggle('collapsed');
     tab.textContent = collapsed ? '▶' : '◀';
     tab.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    setTimeout(() => map && map.invalidateSize(), 260);
 }
 
 function toggleFilterPanel() {
@@ -275,17 +285,97 @@ function onAllYearsToggle() {
     const allChecked = document.getElementById('all-years').checked;
     const slider   = document.getElementById('year-slider');
     const numInput = document.getElementById('year-input');
+    const playBtn  = document.getElementById('year-play');
     if (allChecked) {
+        stopYearPlay();
         slider.setAttribute('disabled', '');
         numInput.setAttribute('disabled', '');
+        if (playBtn) playBtn.setAttribute('disabled', '');
         STATE.year = null;
     } else {
         slider.removeAttribute('disabled');
         numInput.removeAttribute('disabled');
+        if (playBtn) playBtn.removeAttribute('disabled');
         STATE.year = parseInt(slider.value);
         numInput.value = STATE.year;
     }
     applyFilters();
+}
+
+// ── Year animation ──────────────────────────────────────────────────────────
+
+function getDataYears() {
+    // Return sorted list of years that have at least one visible-layer feature
+    const years = new Set();
+    for (const layer of ['A1', 'A2', 'G']) {
+        if (!DATA[layer]) continue;
+        for (const f of DATA[layer].features) years.add(f.properties.year);
+    }
+    return [...years].sort((a, b) => a - b);
+}
+
+let _playYears = [];
+let _playIdx   = 0;
+
+function toggleYearPlay() {
+    if (_playInterval) stopYearPlay();
+    else startYearPlay();
+}
+
+function startYearPlay() {
+    // Ensure specific-year mode is active
+    const allYears = document.getElementById('all-years');
+    if (allYears && allYears.checked) {
+        allYears.checked = false;
+        onAllYearsToggle();
+    }
+    const slider = document.getElementById('year-slider');
+    const btn    = document.getElementById('year-play');
+    if (!slider) return;
+
+    // Build the list of years that actually have data
+    _playYears = getDataYears();
+    if (_playYears.length === 0) return;
+
+    // Start from the beginning if at (or past) the last data year
+    const current = parseInt(slider.value);
+    const lastDataYear = _playYears[_playYears.length - 1];
+    if (current >= lastDataYear) {
+        _playIdx = 0;
+    } else {
+        // Resume from nearest data year >= current
+        _playIdx = _playYears.findIndex(y => y >= current);
+        if (_playIdx < 0) _playIdx = 0;
+    }
+
+    // Jump immediately to starting year
+    _setPlayYear(_playYears[_playIdx]);
+
+    btn.textContent = '⏸';
+    btn.title = 'Pause animation';
+    btn.classList.add('playing');
+
+    _playInterval = setInterval(() => {
+        _playIdx++;
+        if (_playIdx >= _playYears.length) { stopYearPlay(); return; }
+        _setPlayYear(_playYears[_playIdx]);
+    }, 900);
+}
+
+function _setPlayYear(year) {
+    const slider = document.getElementById('year-slider');
+    const numInput = document.getElementById('year-input');
+    slider.value   = year;
+    numInput.value = year;
+    STATE.year     = year;
+    applyFilters();
+}
+
+function stopYearPlay() {
+    clearInterval(_playInterval);
+    _playInterval = null;
+    const btn = document.getElementById('year-play');
+    if (btn) { btn.textContent = '▶'; btn.title = 'Animate through years'; btn.classList.remove('playing'); }
 }
 
 let _yearInputTimer = null;
@@ -322,12 +412,15 @@ function initYearSlider(minYear, maxYear) {
     }
     // Ensure disabled state matches checkbox
     const allChecked = document.getElementById('all-years').checked;
+    const playBtn = document.getElementById('year-play');
     if (allChecked) {
         slider.setAttribute('disabled', '');
         numInput.setAttribute('disabled', '');
+        if (playBtn) playBtn.setAttribute('disabled', '');
     } else {
         slider.removeAttribute('disabled');
         numInput.removeAttribute('disabled');
+        if (playBtn) playBtn.removeAttribute('disabled');
     }
 }
 
@@ -380,7 +473,9 @@ function updateHash() {
     if (STATE.hideLow) p.set('conf', 'nol');
 
     const qs = p.toString();
-    history.replaceState(null, '', qs ? '#' + qs : location.pathname + location.search);
+    const href = qs ? '#' + qs : location.pathname + location.search;
+    clearTimeout(_hashTimer);
+    _hashTimer = setTimeout(() => history.replaceState(null, '', href), 100);
 }
 
 function restoreFromHash() {
@@ -449,24 +544,52 @@ async function loadChoropleth() {
                     return { fillColor: '#5c3370', fillOpacity: 0.45, weight: 0.5, color: '#999', opacity: 0.6 };
                 }
                 const d = complianceRates[iso3];
-                if (!d) {
-                    return { fillColor: 'url(#country-hatch)', fillOpacity: 1, weight: 0.3, color: '#ccc', opacity: 0.4 };
+                if (d) {
+                    return {
+                        fillColor:   choroColor(+d.a1_rate),
+                        fillOpacity: 0.55,
+                        weight:      0.5,
+                        color:       '#aaa',
+                        opacity:     0.6,
+                    };
                 }
-                return {
-                    fillColor:   choroColor(+d.a1_rate),
-                    fillOpacity: 0.55,
-                    weight:      0.5,
-                    color:       '#aaa',
-                    opacity:     0.6,
-                };
+                // No CBM data — style by BWC membership
+                if (BWC_NON_PARTIES.has(iso3)) {
+                    return { fillColor: 'url(#country-hatch)', fillOpacity: 1, weight: 0.5, color: '#bbb', opacity: 0.5 };
+                }
+                if (BWC_SIGNATORIES.has(iso3)) {
+                    return { fillColor: '#d4b870', fillOpacity: 0.35, weight: 0.6, color: '#b09040', opacity: 0.6 };
+                }
+                // BWC state party but no public CBM data
+                return { fillColor: '#b8bdd0', fillOpacity: 0.40, weight: 0.5, color: '#8890a0', opacity: 0.6 };
             },
             onEachFeature: (feature, layer) => {
                 const iso3 = feature.properties['ISO3166-1-Alpha-3'];
                 const name = feature.properties.name;
                 const isRestricted = RESTRICTED.has(iso3) || RESTRICTED_NAMES.has(name);
-                if (isRestricted) return;
                 const d = complianceRates[iso3];
-                if (d) layer.on('click', () => selectCountry(iso3));
+
+                let bwcStatus;
+                if (isRestricted) {
+                    bwcStatus = 'Submitted CBM (restricted — not public)';
+                } else if (d) {
+                    bwcStatus = `${d.submission_count} public submission${d.submission_count !== 1 ? 's' : ''}`;
+                } else if (BWC_NON_PARTIES.has(iso3)) {
+                    bwcStatus = 'Not a BWC member';
+                } else if (BWC_SIGNATORIES.has(iso3)) {
+                    bwcStatus = 'BWC signatory (signed, not ratified)';
+                } else {
+                    bwcStatus = 'BWC state party — no public CBM data';
+                }
+
+                layer.bindTooltip(
+                    `<strong>${name}</strong><br><small style="color:#888">${bwcStatus}</small>`,
+                    { sticky: true, className: 'choro-tip' }
+                );
+
+                if (!isRestricted && d) {
+                    layer.on('click', () => selectCountry(iso3));
+                }
             },
         });
 
@@ -485,6 +608,7 @@ function addLegend() {
             const div = L.DomUtil.create('div', 'map-legend');
             const dot = (c) => `<span class="legend-dot" style="background:${c}"></span>`;
             const sq  = (c) => `<span class="legend-sq"  style="background:${c}"></span>`;
+            const hatch = `<span class="legend-sq legend-hatch"></span>`;
             div.innerHTML =
                 `<div class="leg-title">RESEARCH (BSL LEVEL)</div>` +
                 [['BSL-4','#c0392b'],['BSL-3','#e67e22'],['BSL-2','#f39c12'],['BSL-1','#27ae60'],['Unknown','#95a5a6']]
@@ -492,12 +616,15 @@ function addLegend() {
                 `<div class="leg-title">OTHER LAYERS</div>` +
                 `<div>${dot('#8b1a1a')}Defence (A2)</div>` +
                 `<div>${dot('#0a7a6a')}Vaccine (G)</div>` +
-                `<div class="leg-title">FORM A1 RATE</div>` +
+                `<div class="leg-title">FORM A1 SUBMISSION RATE</div>` +
                 [['>80%','#08519c'],['60–80%','#2171b5'],['40–60%','#4292c6'],
-                 ['20–40%','#9ecae1'],['1–20%','#deebf7'],['None','#f5f5f5']]
+                 ['20–40%','#9ecae1'],['1–20%','#deebf7']]
                     .map(([l,c]) => `<div>${sq(c)}${l}</div>`).join('') +
-                `<div class="leg-title">RESTRICTED</div>` +
-                `<div>${sq('#5c3370')}CHN / FRA / RUS / IND</div>`;
+                `<div class="leg-title">BWC MEMBERSHIP</div>` +
+                `<div>${sq('#5c3370')}Restricted (CHN/FRA/RUS/IND)</div>` +
+                `<div>${sq('#b8bdd0')}State party — no public CBM</div>` +
+                `<div>${sq('#d4b870')}Signatory (not ratified)</div>` +
+                `<div>${hatch}Non-member</div>`;
             return div;
         },
     });
@@ -533,6 +660,7 @@ function renderCountryList(countries) {
 // ── Country detail ─────────────────────────────────────────────────────────
 
 async function selectCountry(iso3) {
+    _currentIso3 = iso3;
     document.querySelectorAll('.country-item').forEach(el =>
         el.classList.toggle('active', el.dataset.iso3 === iso3)
     );
@@ -560,12 +688,58 @@ async function selectCountry(iso3) {
     }
 }
 
+let _currentIso3  = null;
+let _tabLoaded    = {};   // track which tabs have been fetched
+let _defenceData  = null; // cached defence API response for current country
+let _defenceSubtab = 'def-programmes'; // active defence sub-tab
+
 function renderCountryDetail(data) {
     document.getElementById('detail-loading').style.display = 'none';
-    document.getElementById('detail-content').style.display = 'block';
+    document.getElementById('detail-content').style.display = 'flex';
     document.getElementById('detail-title').textContent = data.country_name;
+
+    // Subtitle: submission count + A1 rate
+    const cr = complianceRates[data.country_iso3 || _currentIso3];
+    const sub = document.getElementById('detail-subtitle');
+    if (sub && cr) {
+        const rate = cr.a1_rate != null ? ` · A1 rate ${Math.round(cr.a1_rate * 100)}%` : '';
+        sub.textContent = `${cr.submission_count} submission${cr.submission_count !== 1 ? 's' : ''}${rate}`;
+    } else if (sub) { sub.textContent = ''; }
+
     renderComplianceGrid(data.compliance);
     renderFacilityList(data.facilities);
+    // Reset lazy-loaded tabs
+    _tabLoaded = {};
+    _defenceData = null;
+    _defenceSubtab = 'def-programmes';
+    document.querySelectorAll('.dsubtab').forEach(b =>
+        b.classList.toggle('active', b.dataset.subtab === 'def-programmes')
+    );
+    document.getElementById('defence-content').innerHTML    = '<div class="side-placeholder">Loading…</div>';
+    document.getElementById('vaccine-content').innerHTML    = '<div class="side-placeholder">Loading…</div>';
+    document.getElementById('legislation-content').innerHTML= '<div class="side-placeholder">Loading…</div>';
+    document.getElementById('history-content').innerHTML    = '<div class="side-placeholder">Loading…</div>';
+    // Switch to compliance tab by default
+    switchDetailTab('compliance');
+}
+
+function switchDetailTab(name) {
+    document.querySelectorAll('.dtab').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === name)
+    );
+    document.querySelectorAll('.tab-pane').forEach(p => {
+        const active = p.id === `tab-${name}`;
+        // Defence tab uses flex layout for its sub-tab bar
+        p.style.display = active ? (p.id === 'tab-defence' ? 'flex' : 'block') : 'none';
+    });
+    // Lazy-load tab data
+    if (_currentIso3 && !_tabLoaded[name]) {
+        _tabLoaded[name] = true;
+        if      (name === 'defence')     loadDefenceTab(_currentIso3);
+        else if (name === 'vaccine')     loadVaccineTab(_currentIso3);
+        else if (name === 'legislation') loadLegislationTab(_currentIso3);
+        else if (name === 'history')     loadHistoryTab(_currentIso3);
+    }
 }
 
 // ── Compliance grid ────────────────────────────────────────────────────────
@@ -588,7 +762,8 @@ function renderComplianceGrid(compliance) {
 
     const tdClass = s =>
         s === 'substantive'        ? 'td-sub' :
-        s === 'nothing_to_declare' ? 'td-ntd' : 'td-abs';
+        s === 'nothing_to_declare' ? 'td-ntd' :
+        s === 'limited'            ? 'td-ltd' : 'td-abs';
 
     let html =
         `<table>` +
@@ -630,6 +805,239 @@ function renderFacilityList(facilities) {
                 </div>
             </div>`;
     }).join('');
+}
+
+// ── Tab loaders ────────────────────────────────────────────────────────────
+
+async function loadDefenceTab(iso3) {
+    const el = document.getElementById('defence-content');
+    try {
+        const data = await api(`/api/country/${iso3}/defence`);
+        _defenceData = data;
+        if (!data.programmes.length && !data.entities.length) {
+            el.innerHTML = '<div class="side-placeholder">No defence data declared</div>';
+            return;
+        }
+        renderDefenceProgrammes(data.programmes);
+    } catch (e) {
+        el.innerHTML = '<div class="side-placeholder" style="color:#c0392b">Error loading data</div>';
+    }
+}
+
+function switchDefenceSubtab(name) {
+    _defenceSubtab = name;
+    document.querySelectorAll('.dsubtab').forEach(b =>
+        b.classList.toggle('active', b.dataset.subtab === name)
+    );
+    if (!_defenceData) return;
+    if (name === 'def-programmes') {
+        renderDefenceProgrammes(_defenceData.programmes);
+    } else {
+        renderDefenceFacilityList(_defenceData.entities);
+    }
+}
+
+function renderDefenceProgrammes(programmes) {
+    const el = document.getElementById('defence-content');
+    if (!programmes || !programmes.length) {
+        el.innerHTML = '<div class="side-placeholder">No programmes declared</div>';
+        return;
+    }
+    const uniqueYears = [...new Set(programmes.map(p => p.year))].sort((a, b) => b - a);
+    el.innerHTML =
+        `<div class="side-section-label" style="padding:10px 16px 4px">PROGRAMMES (FORM A2) · ${uniqueYears.length} year${uniqueYears.length !== 1 ? 's' : ''}</div>` +
+        programmes.map(p => `
+            <div class="def-prog">
+                <div class="def-prog-name">${esc(p.programme_name || 'National Programme')}
+                    <span style="color:#404870;font-weight:400;margin-left:6px">${p.year}</span></div>
+                ${p.responsible_org ? `<div class="def-prog-org">${esc(p.responsible_org)}</div>` : ''}
+                ${p.objectives_summary ? `<div class="def-prog-obj">${esc(p.objectives_summary)}</div>` : ''}
+                ${p.total_funding_amount ? `<div class="def-prog-org" style="margin-top:3px">Funding: ${esc(p.total_funding_amount)} ${esc(p.total_funding_currency || '')}</div>` : ''}
+            </div>`).join('');
+}
+
+function renderDefenceFacilityList(entities) {
+    const el = document.getElementById('defence-content');
+    if (!entities || !entities.length) {
+        el.innerHTML = '<div class="side-placeholder">No defence facilities declared</div>';
+        return;
+    }
+    el.innerHTML =
+        `<div class="side-section-label" style="padding:10px 16px 4px">DECLARED FACILITIES · ${entities.length}</div>` +
+        entities.map(e => {
+            const yrs = e.first_year === e.last_year
+                ? String(e.first_year)
+                : `${e.first_year}–${e.last_year}`;
+            const bsl = e.has_bsl4 ? `<span style="color:${bslColor('BSL-4')}">BSL-4</span>`
+                       : e.has_bsl3 ? `<span style="color:${bslColor('BSL-3')}">BSL-3</span>` : '';
+            return `<div class="fac-item" onclick="showDefenceEntityModal('${esc(e.canonical_id)}')">
+                <div class="fac-name">${esc(e.canonical_name || '[Unnamed facility]')}</div>
+                <div class="fac-meta">${bsl ? bsl + ' &nbsp;·&nbsp; ' : ''}${yrs}</div>
+            </div>`;
+        }).join('');
+}
+
+async function showDefenceEntityModal(entityId) {
+    map.closePopup();
+    document.getElementById('modal-title').textContent = 'Loading…';
+    document.getElementById('modal-body').innerHTML = '<div class="text-center py-4 text-muted">Loading…</div>';
+    entityModal.show();
+    try {
+        const data = await api(`/api/entity/defence/${entityId}`);
+        renderDefenceEntityModal(data);
+    } catch (e) {
+        document.getElementById('modal-body').innerHTML = '<div class="text-danger">Error loading facility data.</div>';
+    }
+}
+
+function renderDefenceEntityModal(data) {
+    document.getElementById('modal-title').textContent = data.canonical_name || '[Unnamed facility]';
+
+    let html = `
+        <div class="text-muted small mb-3">
+            <strong>${esc(data.country_name || data.country_iso3)}</strong>
+            &nbsp;·&nbsp; ID: <code>${esc(data.canonical_defence_facility_id)}</code>
+            &nbsp;·&nbsp; <span style="color:#8b4a4a">Defence facility</span>
+            &nbsp;·&nbsp; ${data.first_year}–${data.last_year}
+        </div>`;
+
+    if (data.all_names && data.all_names.length > 1) {
+        html += `<div class="mb-3"><small class="text-muted"><strong>Also known as:</strong> ${data.all_names.map(esc).join('; ')}</small></div>`;
+    }
+
+    html += (data.year_records || []).map(yr => {
+        const bslParts = [];
+        if (yr.bsl4_area_m2) bslParts.push(`BSL-4: ${yr.bsl4_area_m2} m²`);
+        if (yr.bsl3_area_m2) bslParts.push(`BSL-3: ${yr.bsl3_area_m2} m²`);
+        if (yr.bsl2_area_m2) bslParts.push(`BSL-2: ${yr.bsl2_area_m2} m²`);
+        const kvs = [
+            ['Facility name',       yr.facility_name],
+            ['City',                yr.city],
+            ['Address',             yr.address],
+            ['Containment',         bslParts.join(', ') || null],
+            ['Personnel (total)',    yr.personnel_total],
+            ['Personnel (mil.)',     yr.personnel_military],
+            ['Personnel (civ.)',     yr.personnel_civilian],
+            ['MoD funded',          yr.mod_funded != null ? (yr.mod_funded ? 'Yes' : 'No') : null],
+            ['Work description',    yr.work_description],
+            ['Funding source',      yr.funding_source],
+        ].filter(([, v]) => v != null && v !== '');
+
+        return `
+            <div class="year-record">
+                <div class="yr-head">${yr.year}
+                    ${yr.source_url
+                        ? `<a href="${esc(yr.source_url)}" target="_blank" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
+                        : ''}
+                    ${yr.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(yr.confidence * 100)}%</small>` : ''}
+                    ${yr.geocode_confidence ? `<small class="text-muted fw-normal ms-2">geocode: ${yr.geocode_confidence}</small>` : ''}
+                </div>
+                <dl class="yr-kv">
+                    ${kvs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join('')}
+                </dl>
+            </div>`;
+    }).join('') || '<div class="text-muted">No year records found.</div>';
+
+    document.getElementById('modal-body').innerHTML = html;
+}
+
+async function loadVaccineTab(iso3) {
+    const el = document.getElementById('vaccine-content');
+    try {
+        const data = await api(`/api/country/${iso3}/vaccine`);
+        if (!data.entities.length) {
+            el.innerHTML = '<div class="side-placeholder">No vaccine facilities declared</div>';
+            return;
+        }
+        el.innerHTML = `<div class="side-section-label" style="padding:10px 16px 4px">VACCINE FACILITIES (FORM G)</div>` +
+            data.entities.map(vf => {
+                const recs = data.records.filter(r => r.canonical_vaccine_facility_id === vf.canonical_id);
+                const years = recs.map(r => r.year).filter(Boolean);
+                const yStr = years.length
+                    ? `${Math.min(...years)}–${Math.max(...years)}`
+                    : (vf.first_year ? `${vf.first_year}–${vf.last_year}` : '');
+                const diseases = recs.find(r => r.diseases_covered)?.diseases_covered || '';
+                return `<div class="vac-item">
+                    <div class="vac-name">${esc(vf.canonical_name || '[Unnamed]')}</div>
+                    <div class="vac-meta">${yStr}${diseases ? ' · ' + esc(diseases.slice(0,60)) : ''}</div>
+                </div>`;
+            }).join('');
+    } catch (e) {
+        el.innerHTML = '<div class="side-placeholder" style="color:#c0392b">Error loading data</div>';
+    }
+}
+
+async function loadLegislationTab(iso3) {
+    const el = document.getElementById('legislation-content');
+    try {
+        const data = await api(`/api/country/${iso3}/legislation`);
+        if (!data.length) {
+            el.innerHTML = '<div class="side-placeholder">No legislation data declared</div>';
+            return;
+        }
+        const yn = v => v === true  ? `<span class="leg-yn-yes">Yes</span>`
+                      : v === false ? `<span class="leg-yn-no">No</span>`
+                      : '—';
+        const cats = [
+            ['prohibitions', 'Prohibitions'],
+            ['exports',      'Export ctrl'],
+            ['imports',      'Import ctrl'],
+            ['biosafety',    'Biosafety'],
+        ];
+        const flds = ['legislation', 'regulations', 'other_measures'];
+        // Show most recent year only by default; user can see all years
+        const latest = data[0];
+        let html = `<div style="padding:8px 16px 4px;color:#4a5280;font-size:10px;font-weight:700;letter-spacing:0.08em">FORM E — ${data.length} YEAR${data.length !== 1 ? 'S' : ''}</div>`;
+        data.forEach(rec => {
+            const laws = rec.key_laws && Array.isArray(rec.key_laws) ? rec.key_laws : [];
+            html += `<div class="leg-year-block">
+                <div class="leg-year-head">${rec.year}
+                    ${rec.source_url ? `<a href="${esc(rec.source_url)}" target="_blank" class="popup-link" style="font-size:10px;margin-left:8px">source ↗</a>` : ''}
+                </div>
+                <table class="leg-table">
+                    <tr><td></td><td>Legis.</td><td>Regs.</td><td>Other</td><td>Amended</td></tr>
+                    ${cats.map(([key, label]) => `
+                    <tr><td>${label}</td>
+                        ${flds.map(f => `<td>${yn(rec[key + '_' + f])}</td>`).join('')}
+                        <td>${yn(rec[key + '_amended'])}</td>
+                    </tr>`).join('')}
+                </table>
+                ${laws.length ? `<div class="leg-laws">${esc(laws.join('; ').slice(0, 200))}</div>` : ''}
+            </div>`;
+        });
+        el.innerHTML = html;
+    } catch (e) {
+        el.innerHTML = '<div class="side-placeholder" style="color:#c0392b">Error loading data</div>';
+    }
+}
+
+async function loadHistoryTab(iso3) {
+    const el = document.getElementById('history-content');
+    try {
+        const data = await api(`/api/country/${iso3}/past-programmes`);
+        if (!data.length) {
+            el.innerHTML = '<div class="side-placeholder">No past programme data declared</div>';
+            return;
+        }
+        el.innerHTML = `<div style="padding:8px 16px 4px;color:#4a5280;font-size:10px;font-weight:700;letter-spacing:0.08em">FORM F — PAST PROGRAMMES</div>` +
+            data.map(rec => {
+                const hasBadge = (flag, cls, label) =>
+                    `<span class="hist-badge ${flag ? cls : 'hist-none'}">${label}: ${flag ? 'Yes' : 'No'}</span>`;
+                return `<div class="hist-item">
+                    <div class="hist-year">${rec.year}
+                        ${rec.source_url ? `<a href="${esc(rec.source_url)}" target="_blank" class="popup-link" style="font-size:10px;margin-left:8px">source ↗</a>` : ''}
+                    </div>
+                    <div style="margin-bottom:4px">
+                        ${hasBadge(rec.has_offensive_programme, 'hist-offensive', 'Offensive')}
+                        ${hasBadge(rec.has_defensive_programme, 'hist-defensive', 'Defensive')}
+                    </div>
+                    ${rec.offensive_summary ? `<div class="hist-summary">${esc(rec.offensive_summary.slice(0, 300))}</div>` : ''}
+                    ${rec.defensive_summary ? `<div class="hist-summary" style="margin-top:3px">${esc(rec.defensive_summary.slice(0, 300))}</div>` : ''}
+                </div>`;
+            }).join('');
+    } catch (e) {
+        el.innerHTML = '<div class="side-placeholder" style="color:#c0392b">Error loading data</div>';
+    }
 }
 
 // ── Entity modal ───────────────────────────────────────────────────────────
@@ -684,7 +1092,9 @@ function renderEntityModal(data) {
         return `
             <div class="year-record">
                 <div class="yr-head">${yr.year}
-                    <small class="text-muted fw-normal ms-2">${esc(yr.document_id)}</small>
+                    ${yr.source_url
+                        ? `<a href="${esc(yr.source_url)}" target="_blank" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
+                        : `<small class="text-muted fw-normal ms-2">${esc(yr.document_id)}</small>`}
                     ${yr.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(yr.confidence * 100)}%</small>` : ''}
                     ${yr.geocode_confidence ? `<small class="text-muted fw-normal ms-2">geocode: ${yr.geocode_confidence}</small>` : ''}
                 </div>
@@ -706,8 +1116,29 @@ function initSearch() {
     input.addEventListener('input', () => {
         clearTimeout(searchTimer);
         const q = input.value.trim();
-        if (q.length < 2) { results.classList.remove('open'); return; }
+        if (q.length < 2) { results.classList.remove('open'); input.classList.remove('searching'); return; }
+        input.classList.add('searching');
         searchTimer = setTimeout(() => doSearch(q), 300);
+    });
+
+    input.addEventListener('keydown', e => {
+        if (!results.classList.contains('open')) return;
+        const items = [...results.querySelectorAll('li[data-idx]')];
+        const active = results.querySelector('li.sr-active');
+        const idx = active ? items.indexOf(active) : -1;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            active?.classList.remove('sr-active');
+            (items[idx + 1] || items[0])?.classList.add('sr-active');
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            active?.classList.remove('sr-active');
+            (items[idx - 1] || items[items.length - 1])?.classList.add('sr-active');
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            (active || items[0])?.click();
+        }
     });
 
     input.addEventListener('blur', () =>
@@ -719,27 +1150,136 @@ function initSearch() {
     });
 }
 
+const _LAYER_LABEL = { A1: 'Research', A2: 'Defence', G: 'Vaccine' };
+const _LAYER_COLOR = { A1: '#4a8ad4', A2: '#8b1a1a', G: '#0a7a6a' };
+
 async function doSearch(q) {
+    const input   = document.getElementById('search-input');
     const results = document.getElementById('search-results');
     try {
         const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
+        input.classList.remove('searching');
         results.innerHTML = data.length === 0
-            ? '<li style="color:#6070a0;font-size:12px">No results found</li>'
-            : data.map(f =>
-                `<li onclick="selectSearchResult('${f.canonical_facility_id}','${f.country_iso3}')">
-                    <div>${esc(f.canonical_name || '[Unnamed]')}</div>
+            ? '<li style="color:#6070a0;font-size:12px;padding:10px 14px">No results found</li>'
+            : data.map((f, i) => {
+                const layerColor = _LAYER_COLOR[f.layer] || '#4a8ad4';
+                const layerLabel = _LAYER_LABEL[f.layer] || f.layer;
+                const onclick = f.id
+                    ? `selectSearchResult('${f.id}','${f.country_iso3}','${f.layer}')`
+                    : `selectCountry('${f.country_iso3}')`;
+                return `<li data-idx="${i}" onclick="${onclick}">
+                    <div>${esc(f.name || '[Unnamed]')}
+                        <span style="float:right;font-size:10px;color:${layerColor}">${layerLabel}</span>
+                    </div>
                     <div class="sr-meta">${esc(f.country_name || f.country_iso3)}</div>
-                </li>`
-              ).join('');
+                </li>`;
+              }).join('');
         results.classList.add('open');
-    } catch (e) { console.error('Search error:', e); }
+    } catch (e) {
+        input.classList.remove('searching');
+        console.error('Search error:', e);
+    }
 }
 
-async function selectSearchResult(entityId, iso3) {
+async function selectSearchResult(entityId, iso3, layer) {
     document.getElementById('search-results').classList.remove('open');
     document.getElementById('search-input').value = '';
     await selectCountry(iso3);
-    showEntityModal(entityId);
+    if (layer === 'A1' && entityId) {
+        // Switch to Research tab then show entity modal
+        switchDetailTab('research');
+        showEntityModal(entityId);
+    } else if (layer === 'G') {
+        switchDetailTab('vaccine');
+    } else if (layer === 'A2') {
+        switchDetailTab('defence');
+    }
+}
+
+// ── Copy permalink ─────────────────────────────────────────────────────────
+
+function copyPermalink() {
+    updateHash();
+    // Small delay to let the hash settle
+    setTimeout(() => {
+        navigator.clipboard.writeText(location.href).then(() => {
+            const btn = document.getElementById('fp-copy');
+            if (!btn) return;
+            const orig = btn.textContent;
+            btn.textContent = '✓ Copied!';
+            setTimeout(() => { btn.textContent = orig; }, 1800);
+        }).catch(() => {
+            // Fallback for browsers without clipboard API
+            prompt('Copy this link:', location.href);
+        });
+    }, 120);
+}
+
+// ── Global compliance table ─────────────────────────────────────────────────
+
+function showGlobalTable() {
+    const rows = _countriesData.map(c => {
+        const cr = complianceRates[c.country_iso3] || {};
+        return { ...c, a1_rate: cr.a1_rate != null ? +cr.a1_rate : null };
+    });
+    renderGlobalTable(rows, _tableSort.col, _tableSort.dir);
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('global-table-modal')).show();
+}
+
+function sortGlobalTable(col) {
+    const newDir = (_tableSort.col === col && _tableSort.dir === 'desc') ? 'asc' : 'desc';
+    const rows = _countriesData.map(c => {
+        const cr = complianceRates[c.country_iso3] || {};
+        return { ...c, a1_rate: cr.a1_rate != null ? +cr.a1_rate : null };
+    });
+    renderGlobalTable(rows, col, newDir);
+}
+
+function renderGlobalTable(rows, sortCol, sortDir) {
+    _tableSort = { col: sortCol, dir: sortDir };
+
+    const sorted = [...rows].sort((a, b) => {
+        let av = a[sortCol], bv = b[sortCol];
+        const nullVal = sortDir === 'asc' ? Infinity : -Infinity;
+        if (av == null) av = typeof bv === 'string' ? (sortDir === 'asc' ? 'zzz' : '') : nullVal;
+        if (bv == null) bv = typeof av === 'string' ? (sortDir === 'asc' ? 'zzz' : '') : nullVal;
+        if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        return sortDir === 'asc' ? av - bv : bv - av;
+    });
+
+    const arrow = col => col !== sortCol ? '' : (sortDir === 'asc' ? ' ▲' : ' ▼');
+    const th = (col, label) =>
+        `<th class="gt-th-sort${col === sortCol ? ' gt-sorted' : ''}" onclick="sortGlobalTable('${col}')">${label}${arrow(col)}</th>`;
+
+    let html = `<table class="gt-table">
+        <thead><tr>
+            ${th('country_name',   'Country')}
+            ${th('submission_count','Submissions')}
+            ${th('a1_rate',        'A1 rate')}
+            ${th('facility_count', 'Research fac.')}
+            ${th('bsl4_count',     'BSL-4')}
+            ${th('latest_year',    'Latest year')}
+        </tr></thead><tbody>`;
+
+    sorted.forEach(c => {
+        const rate = c.a1_rate != null
+            ? `<span class="gt-rate" style="background:${choroColor(c.a1_rate)}">${Math.round(c.a1_rate * 100)}%</span>`
+            : `<span class="gt-rate gt-rate-none">—</span>`;
+        const bsl4 = c.bsl4_count
+            ? `<strong style="color:#c0392b">${c.bsl4_count}</strong>`
+            : '<span style="color:#aaa">—</span>';
+        html += `<tr class="gt-row" onclick="selectCountry('${c.country_iso3}');bootstrap.Modal.getInstance(document.getElementById('global-table-modal')).hide()">
+            <td>${esc(c.country_name || c.country_iso3)}</td>
+            <td>${c.submission_count || 0}</td>
+            <td>${rate}</td>
+            <td>${c.facility_count || 0}</td>
+            <td>${bsl4}</td>
+            <td>${c.latest_year || '—'}</td>
+        </tr>`;
+    });
+
+    html += '</tbody></table>';
+    document.getElementById('gt-tbody').innerHTML = html;
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────

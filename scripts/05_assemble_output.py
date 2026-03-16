@@ -97,7 +97,8 @@ CSV_FIELDS_DEFENCE_PROGRAMMES = [
 ]
 
 CSV_FIELDS_DEFENCE_FACILITIES = [
-    "country_iso3", "year", "facility_name", "city", "address",
+    "country_iso3", "year", "canonical_defence_facility_id",
+    "facility_name", "city", "address",
     "bsl2_area_m2", "bsl3_area_m2", "bsl4_area_m2", "total_lab_area_m2",
     "personnel_total", "personnel_military", "personnel_civilian",
     "personnel_scientists", "personnel_engineers", "personnel_technicians",
@@ -134,7 +135,7 @@ CSV_FIELDS = [
 CSV_FIELDS_G = [
     "country_iso3", "year", "facility_name",
     "city", "address", "diseases_covered", "vaccines_summary",
-    "confidence", "translated", "source_document",
+    "confidence", "translated", "canonical_vaccine_facility_id", "source_document",
 ]
 
 
@@ -462,8 +463,23 @@ def load_compliance_data(catalogue: list[dict]) -> list[dict]:
                 status = "nothing_to_declare"
                 ntd_count += 1
             else:
+                # Check for 'limited': form is present & not NTD, but for A1/G
+                # the extracted JSON has zero facilities — indicates a BSL-level-only
+                # declaration, redacted public version, or blank-template submission.
                 status = "substantive"
-                substantive_count += 1
+                if form == "A1":
+                    a1_json = STRUCTURED_DIR / f"{doc_id}_form_a1.json"
+                    if a1_json.exists():
+                        try:
+                            a1 = json.loads(a1_json.read_text(encoding="utf-8"))
+                            if a1.get("facility_count", -1) == 0:
+                                status = "limited"
+                        except Exception:
+                            pass
+                if status == "substantive":
+                    substantive_count += 1
+                elif status == "limited":
+                    ntd_count += 1   # counted alongside NTD for summary stats
             row[f"form_{form.lower()}"] = status
 
         row["forms_substantive_count"] = substantive_count
@@ -550,6 +566,187 @@ def resolve_entities(records: list[dict]) -> dict[int, str]:
     return id_map
 
 
+# ── Vaccine entity resolution ─────────────────────────────────────────────────
+
+
+def resolve_vaccine_entities(records: list[dict]) -> dict[int, str]:
+    """
+    Assign a canonical_vaccine_facility_id to each vaccine facility record.
+
+    Mirrors resolve_entities() for Form A1, using the same thresholds:
+    - SIMILARITY_THRESHOLD (85) for cross-year name matching
+    - SAME_YEAR_THRESHOLD (95) for within-year matching (same CBM submission)
+
+    Returns a dict: record_index → canonical_vaccine_facility_id (e.g. "GBR_V001").
+    """
+    by_country: dict[str, list[int]] = defaultdict(list)
+    for i, rec in enumerate(records):
+        country = (rec.get("extraction_metadata") or {}).get("country_iso3", "UNK")
+        by_country[country].append(i)
+
+    uf = UnionFind()
+
+    for indices in by_country.values():
+        names = [(i, records[i].get("facility_name") or "") for i in indices]
+        for a in range(len(names)):
+            for b in range(a + 1, len(names)):
+                ia, na = names[a]
+                ib, nb = names[b]
+                if not na or not nb:
+                    continue
+                ya = (records[ia].get("extraction_metadata") or {}).get("year")
+                yb = (records[ib].get("extraction_metadata") or {}).get("year")
+                threshold = SAME_YEAR_THRESHOLD if (ya and yb and ya == yb) else SIMILARITY_THRESHOLD
+                if fuzz.token_sort_ratio(na, nb) >= threshold:
+                    uf.union(ia, ib)
+
+    country_groups: dict[str, dict[int, list[int]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for country, indices in by_country.items():
+        for i in indices:
+            country_groups[country][uf.find(i)].append(i)
+
+    id_map: dict[int, str] = {}
+    for country in sorted(country_groups.keys()):
+        groups = sorted(country_groups[country].values(), key=min)
+        for n, members in enumerate(groups, 1):
+            vid = f"{country}_V{n:03d}"
+            for i in members:
+                id_map[i] = vid
+
+    return id_map
+
+
+def build_vaccine_entity_registry(
+    records: list[dict], id_map: dict[int, str]
+) -> list[dict]:
+    """Build a canonical vaccine facility list — one entry per unique facility."""
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for i, rec in enumerate(records):
+        groups[id_map[i]].append(rec)
+
+    registry: list[dict] = []
+    for vid in sorted(groups.keys()):
+        members = sorted(
+            groups[vid],
+            key=lambda r: (r.get("extraction_metadata") or {}).get("year", 0),
+        )
+        latest = members[-1]
+        years = sorted({
+            (r.get("extraction_metadata") or {}).get("year")
+            for r in members
+            if (r.get("extraction_metadata") or {}).get("year")
+        })
+        seen: set[str] = set()
+        all_names: list[str] = []
+        for r in members:
+            n = r.get("facility_name") or ""
+            if n and n not in seen:
+                seen.add(n)
+                all_names.append(n)
+        loc = (latest.get("location") or {})
+        registry.append({
+            "canonical_vaccine_facility_id": vid,
+            "canonical_name":  all_names[-1] if all_names else None,
+            "country_iso3":    (latest.get("extraction_metadata") or {}).get("country_iso3"),
+            "all_names":       all_names,
+            "years_declared":  years,
+            "city":            loc.get("city"),
+        })
+
+    return registry
+
+
+# ── Defence entity resolution ─────────────────────────────────────────────────
+
+
+def resolve_defence_facility_entities(records: list[dict]) -> dict[int, str]:
+    """
+    Assign a canonical_defence_facility_id to each defence facility record.
+
+    Mirrors resolve_vaccine_entities() using the same Union-Find thresholds.
+    Returns a dict: record_index → canonical_defence_facility_id (e.g. "DEU_D001").
+    """
+    by_country: dict[str, list[int]] = defaultdict(list)
+    for i, rec in enumerate(records):
+        country = (rec.get("extraction_metadata") or {}).get("country_iso3", "UNK")
+        by_country[country].append(i)
+
+    uf = UnionFind()
+
+    for indices in by_country.values():
+        names = [(i, records[i].get("facility_name") or "") for i in indices]
+        for a in range(len(names)):
+            for b in range(a + 1, len(names)):
+                ia, na = names[a]
+                ib, nb = names[b]
+                if not na or not nb:
+                    continue
+                ya = (records[ia].get("extraction_metadata") or {}).get("year")
+                yb = (records[ib].get("extraction_metadata") or {}).get("year")
+                threshold = SAME_YEAR_THRESHOLD if (ya and yb and ya == yb) else SIMILARITY_THRESHOLD
+                if fuzz.token_sort_ratio(na, nb) >= threshold:
+                    uf.union(ia, ib)
+
+    country_groups: dict[str, dict[int, list[int]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for country, indices in by_country.items():
+        for i in indices:
+            country_groups[country][uf.find(i)].append(i)
+
+    id_map: dict[int, str] = {}
+    for country in sorted(country_groups.keys()):
+        groups = sorted(country_groups[country].values(), key=min)
+        for n, members in enumerate(groups, 1):
+            did = f"{country}_D{n:03d}"
+            for i in members:
+                id_map[i] = did
+
+    return id_map
+
+
+def build_defence_entity_registry(
+    records: list[dict], id_map: dict[int, str]
+) -> list[dict]:
+    """Build a canonical defence facility list — one entry per unique facility."""
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for i, rec in enumerate(records):
+        groups[id_map[i]].append(rec)
+
+    registry: list[dict] = []
+    for did in sorted(groups.keys()):
+        members = sorted(
+            groups[did],
+            key=lambda r: (r.get("extraction_metadata") or {}).get("year", 0),
+        )
+        latest = members[-1]
+        years = sorted({
+            (r.get("extraction_metadata") or {}).get("year")
+            for r in members
+            if (r.get("extraction_metadata") or {}).get("year")
+        })
+        seen: set[str] = set()
+        all_names: list[str] = []
+        for r in members:
+            n = r.get("facility_name") or ""
+            if n and n not in seen:
+                seen.add(n)
+                all_names.append(n)
+        registry.append({
+            "canonical_defence_facility_id": did,
+            "canonical_name":  all_names[-1] if all_names else None,
+            "country_iso3":    (latest.get("extraction_metadata") or {}).get("country_iso3"),
+            "all_names":       all_names,
+            "years_declared":  years,
+            "has_bsl4":        any(r.get("bsl4_area_m2") for r in members),
+            "has_bsl3":        any(r.get("bsl3_area_m2") for r in members),
+        })
+
+    return registry
+
+
 # ── Flattening ────────────────────────────────────────────────────────────────
 
 
@@ -593,7 +790,7 @@ def flatten_record(rec: dict, cid: str, cat_index: dict[str, str]) -> dict:
     }
 
 
-def flatten_vaccine_record(rec: dict) -> dict:
+def flatten_vaccine_record(rec: dict, vid: str) -> dict:
     """Flatten one vaccine facility dict into a CSV-ready dict."""
     meta = rec.get("extraction_metadata", {}) or {}
     loc  = rec.get("location", {}) or {}
@@ -613,6 +810,7 @@ def flatten_vaccine_record(rec: dict) -> dict:
         "vaccines_summary": "; ".join(rec.get("vaccines") or []),
         "confidence":       rec.get("confidence"),
         "translated":       translated,
+        "canonical_vaccine_facility_id": vid,
         "source_document":  meta.get("source_id"),
     }
 
@@ -801,7 +999,15 @@ def main() -> None:
     vaccine_flat: list[dict] | None = None
     if vaccine_records:
         log.info("Loaded %d vaccine facility-year records (Form G)", len(vaccine_records))
-        vaccine_flat = [flatten_vaccine_record(r) for r in vaccine_records]
+
+        log.info("Resolving vaccine entities (threshold=%d)…", SIMILARITY_THRESHOLD)
+        v_id_map = resolve_vaccine_entities(vaccine_records)
+        v_unique = len({v for v in v_id_map.values()})
+        log.info("Vaccine entity resolution: %d records → %d unique facilities",
+                 len(vaccine_records), v_unique)
+
+        vaccine_flat = [flatten_vaccine_record(r, v_id_map[i])
+                        for i, r in enumerate(vaccine_records)]
         vaccine_flat.sort(key=lambda r: (r["country_iso3"] or "", r["year"] or 0, r["facility_name"] or ""))
 
         vcsv_path = OUTPUT_DIR / "all_vaccine_facilities.csv"
@@ -816,8 +1022,17 @@ def main() -> None:
             json.dumps(vaccine_flat, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
         log.info("Wrote %s", vjson_path)
+
+        # ── vaccine_entity_registry.json ─────────────────────────────────────
+        v_registry = build_vaccine_entity_registry(vaccine_records, v_id_map)
+        vreg_path = OUTPUT_DIR / "vaccine_entity_registry.json"
+        vreg_path.write_text(
+            json.dumps(v_registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        log.info("Wrote %s (%d vaccine entities)", vreg_path, len(v_registry))
     else:
         log.info("No Form G data found; skipping vaccine facility outputs")
+        v_registry = []
 
     # ── Form A Part 2: defence programmes and facilities ──────────────────────
     defence_programmes = load_all_defence_programmes(secondary_ids=secondary_ids)
@@ -835,7 +1050,12 @@ def main() -> None:
             writer.writerows(dp_flat)
         log.info("Wrote %s (%d rows)", dp_csv, len(dp_flat))
 
-        df_flat = [flatten_defence_facility(r) for r in defence_facilities]
+        df_id_map = resolve_defence_facility_entities(defence_facilities)
+        df_flat = []
+        for i, rec in enumerate(defence_facilities):
+            d = flatten_defence_facility(rec)
+            d["canonical_defence_facility_id"] = df_id_map.get(i)
+            df_flat.append(d)
         df_flat.sort(key=lambda r: (r["country_iso3"] or "", r["year"] or 0, r["facility_name"] or ""))
         df_csv = OUTPUT_DIR / "defence_facilities.csv"
         with df_csv.open("w", newline="", encoding="utf-8") as fh:
@@ -843,6 +1063,13 @@ def main() -> None:
             writer.writeheader()
             writer.writerows(df_flat)
         log.info("Wrote %s (%d rows)", df_csv, len(df_flat))
+
+        d_registry = build_defence_entity_registry(defence_facilities, df_id_map)
+        dreg_path = OUTPUT_DIR / "defence_entity_registry.json"
+        dreg_path.write_text(
+            json.dumps(d_registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        log.info("Wrote %s (%d defence entities)", dreg_path, len(d_registry))
     else:
         log.info("No Form A Part 2 data found; skipping defence programme outputs")
         dp_flat = df_flat = []

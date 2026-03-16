@@ -45,23 +45,66 @@
         <div id="panel-detail" class="side-panel" style="display:none">
             <div class="side-header">
                 <button id="back-btn" onclick="showPanel('list')" title="Back">←</button>
-                <span id="detail-title" class="side-title ms-2"></span>
+                <div class="ms-2" style="flex:1;min-width:0">
+                    <div id="detail-title" class="side-title"></div>
+                    <div id="detail-subtitle" class="detail-subtitle"></div>
+                </div>
+            </div>
+            <!-- Tab bar -->
+            <div id="detail-tabs">
+                <button class="dtab active" data-tab="compliance" onclick="switchDetailTab('compliance')">Compliance</button>
+                <button class="dtab" data-tab="research"    onclick="switchDetailTab('research')">Research</button>
+                <button class="dtab" data-tab="defence"     onclick="switchDetailTab('defence')">Defence</button>
+                <button class="dtab" data-tab="vaccine"     onclick="switchDetailTab('vaccine')">Vaccine</button>
+                <button class="dtab" data-tab="legislation" onclick="switchDetailTab('legislation')">Law</button>
+                <button class="dtab" data-tab="history"     onclick="switchDetailTab('history')">History</button>
             </div>
             <div id="detail-loading" class="side-placeholder">Loading…</div>
-            <div id="detail-content" class="side-scroll" style="display:none">
-                <div class="side-section">
-                    <div class="side-section-label">FORM COMPLIANCE</div>
-                    <div id="compliance-legend" class="compliance-legend">
-                        <span><span class="leg-swatch" style="background:#1e7e45"></span>Substantive</span>
-                        <span><span class="leg-swatch" style="background:#7a4010"></span>Nothing to declare</span>
-                        <span><span class="leg-swatch" style="background:#1c1e2e;border:1px solid #3a3c50"></span>Absent</span>
+            <div id="detail-content" style="display:none; flex:1; overflow:hidden; display:none; flex-direction:column">
+
+                <!-- Compliance tab -->
+                <div id="tab-compliance" class="tab-pane side-scroll">
+                    <div class="side-section">
+                        <div class="compliance-legend">
+                            <span><span class="leg-swatch" style="background:#1e7e45"></span>Substantive</span>
+                            <span><span class="leg-swatch" style="background:#7a4010"></span>Nothing to declare</span>
+                            <span><span class="leg-swatch" style="background:#8b6914"></span>Limited</span>
+                            <span><span class="leg-swatch" style="background:#1c1e2e;border:1px solid #3a3c50"></span>Absent</span>
+                        </div>
+                        <div id="compliance-grid"></div>
                     </div>
-                    <div id="compliance-grid"></div>
                 </div>
-                <div class="side-section">
-                    <div class="side-section-label">DECLARED FACILITIES (FORM A1)</div>
+
+                <!-- Research (A1) tab -->
+                <div id="tab-research" class="tab-pane side-scroll" style="display:none">
+                    <div class="side-section-label" style="padding:10px 16px 0">DECLARED FACILITIES (FORM A1)</div>
                     <div id="facility-list"></div>
                 </div>
+
+                <!-- Defence (A2) tab -->
+                <div id="tab-defence" class="tab-pane" style="display:none; height:100%; overflow:hidden; flex-direction:column">
+                    <div id="defence-subtab-bar">
+                        <button class="dsubtab active" data-subtab="def-programmes" onclick="switchDefenceSubtab('def-programmes')">Programmes</button>
+                        <button class="dsubtab" data-subtab="def-facilities" onclick="switchDefenceSubtab('def-facilities')">Facilities</button>
+                    </div>
+                    <div id="defence-content" class="side-scroll" style="height:calc(100% - 33px); overflow-y:auto"></div>
+                </div>
+
+                <!-- Vaccine (G) tab -->
+                <div id="tab-vaccine" class="tab-pane side-scroll" style="display:none">
+                    <div id="vaccine-content"><div class="side-placeholder">Loading…</div></div>
+                </div>
+
+                <!-- Legislation (E) tab -->
+                <div id="tab-legislation" class="tab-pane side-scroll" style="display:none">
+                    <div id="legislation-content"><div class="side-placeholder">Loading…</div></div>
+                </div>
+
+                <!-- Past Programmes (F) tab -->
+                <div id="tab-history" class="tab-pane side-scroll" style="display:none">
+                    <div id="history-content"><div class="side-placeholder">Loading…</div></div>
+                </div>
+
             </div>
         </div>
     </aside>
@@ -111,12 +154,14 @@
                     <div class="fp-label">YEAR</div>
                     <label class="fp-check"><input type="checkbox" id="all-years" checked onchange="onAllYearsToggle()"> Latest per country</label>
                     <div class="fp-year-row">
+                        <button id="year-play" class="fp-play-btn" onclick="toggleYearPlay()" title="Animate through years" disabled>▶</button>
                         <input type="number" id="year-input" min="1988" max="2025" value="2025" step="1" disabled
                                placeholder="e.g. 2022"
                                oninput="onYearInput(this.value)" onchange="onFilterChange()">
-                        <input type="range" id="year-slider" min="1988" max="2025" value="2025" step="1" disabled
-                               oninput="onYearSlider(this.value)" onchange="onFilterChange()">
                     </div>
+                    <input type="range" id="year-slider" min="1988" max="2025" value="2025" step="1" disabled
+                           style="width:100%;margin:4px 0 0"
+                           oninput="onYearSlider(this.value)" onchange="onFilterChange()">
                     <div class="fp-year-range"><span id="yr-min">1988</span><span id="yr-max">2025</span></div>
                 </div>
 
@@ -126,6 +171,8 @@
 
                 <div class="fp-section fp-actions">
                     <button class="fp-btn" onclick="exportCSV()">⬇ Export CSV</button>
+                    <button class="fp-btn" id="fp-copy" onclick="copyPermalink()">🔗 Copy link</button>
+                    <button class="fp-btn" onclick="showGlobalTable()">⊞ All countries</button>
                     <button class="fp-btn" data-bs-toggle="modal" data-bs-target="#about-modal">ℹ About</button>
                 </div>
 
@@ -158,61 +205,85 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <h6>Dataset</h6>
+
                 <p>This tool visualises structured data extracted from <strong>Biological Weapons Convention (BWC)
-                Confidence-Building Measure (CBM)</strong> submissions. The dataset covers
-                <strong>510 publicly available submissions from 51 states parties</strong>,
-                downloaded from the UN BWC portal (<a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>),
-                spanning 1988–2026.</p>
+                Confidence-Building Measure (CBM)</strong> submissions — <strong>510 publicly available submissions
+                from 51 states parties</strong>, downloaded from the UN BWC portal
+                (<a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>), spanning 1988–2026.</p>
 
-                <h6>Restricted submissions <span class="badge" style="background:#5c3370;font-size:11px">purple on map</span></h6>
-                <p><strong>China, France, Russia, and India</strong> have submitted CBMs to the
-                Implementation Support Unit (ISU) but these are designated as confidential and
-                are not publicly available. They appear shaded on the map. Their absence from
-                the facility data does not reflect non-participation — it reflects a transparency
-                choice or designation.</p>
-
-                <h6>Data extraction</h6>
-                <p>All structured information (facility names, locations, containment levels,
-                organisational details) was extracted from PDF documents by a <strong>large language
-                model (Anthropic Claude Sonnet)</strong>. Extraction confidence scores (0–1) are
-                shown per facility where available. Errors and omissions are possible, particularly
-                for scanned or non-English submissions.</p>
-
-                <h6>Geocoding</h6>
-                <p>Facility locations are geocoded using <strong>OpenStreetMap Nominatim</strong>
-                from the address and city fields declared in each submission.
-                Match confidence is rated:</p>
+                <h6 class="about-heading">Layers</h6>
+                <p>Three types of declared facility are shown as map markers:</p>
                 <ul>
-                    <li><strong>High</strong> (Nominatim importance &gt; 0.6) — specific building or address match</li>
-                    <li><strong>Medium</strong> (0.3–0.6) — neighbourhood or district match</li>
-                    <li><strong>Low</strong> (&lt; 0.3) — city-level or country-level only; may be inaccurate by tens of kilometres</li>
-                </ul>
-                <p>Facilities without a geocodable address or city are <strong>not shown on the map</strong>
-                (~3% of records). Use the filter panel to hide low-confidence geocodes.</p>
-
-                <h6>Layers</h6>
-                <ul>
-                    <li><strong>Research facilities (Form A1)</strong> — declared biological research centres and laboratories, coloured by highest biosafety level (BSL)</li>
+                    <li><strong>Research facilities (Form A1)</strong> — declared biological research centres and laboratories, coloured by highest biosafety level (BSL-1 through BSL-4)</li>
                     <li><strong>Defence facilities (Form A Part 2)</strong> — facilities supporting declared national biological defence programmes</li>
                     <li><strong>Vaccine facilities (Form G)</strong> — declared vaccine production facilities</li>
                 </ul>
 
-                <h6>"Nothing to declare"</h6>
-                <p>In the compliance grid, <strong>orange cells</strong> indicate a country submitted
-                that form but declared no relevant activity — this is substantively different from
-                not submitting the form at all (dark cells). A country with all orange cells
-                is actively participating but declaring no facilities.</p>
+                <h6 class="about-heading">Map background (choropleth)</h6>
+                <p>Country shading encodes two things simultaneously: whether a country has submitted public CBMs,
+                and — for those that have — the proportion of those submissions that included substantive
+                <strong>Form A1 research facility declarations</strong>.</p>
+                <p>A country can submit a CBM without declaring any research facilities (e.g. submitting
+                "nothing to declare" for Form A1, or omitting it entirely). The blue scale only measures
+                A1 content, so <strong>a country with many submissions but no A1 declarations will appear
+                near-white</strong>, not blue.</p>
+                <ul>
+                    <li><strong>Dark → light blue</strong> — has public CBM submissions; shade reflects the share of submissions containing substantive Form A1 data (100% = darkest blue)</li>
+                    <li><strong>Grey</strong> — BWC state party (189 as of 2025) but no public CBM on record</li>
+                    <li><strong>Gold</strong> — BWC signatory but not yet ratified (Egypt, Haiti, Somalia, Syria)</li>
+                    <li><strong>Hatched</strong> — not a BWC member (Chad, Comoros, Djibouti, Eritrea, Israel, Micronesia, Namibia, South Sudan, Tuvalu)</li>
+                </ul>
+                <p>Hover over any country to see its name and BWC status. Click a blue country to open its detail panel.</p>
 
-                <h6>Form A1 submission rate (choropleth)</h6>
-                <p>The map background shows the proportion of a country's submissions that included
-                substantive Form A1 data. A rate of 100% means every submission contained facility
-                declarations. Some countries submit annually; others only occasionally.</p>
+                <h6 class="about-heading">Restricted submissions <span class="badge ms-1" style="background:#5c3370;font-size:11px;vertical-align:middle">purple on map</span></h6>
+                <p><strong>China, France, Russia, and India</strong> submit CBMs to the Implementation Support Unit (ISU)
+                but these are designated confidential and not publicly available. Their absence from the facility
+                data reflects a transparency designation, not non-participation.</p>
+
+                <h6 class="about-heading">Compliance grid</h6>
+                <p>The coloured cells in each country's detail panel show submission status per year and form:</p>
+                <ul>
+                    <li><span style="display:inline-block;width:10px;height:10px;background:#1e7e45;border-radius:2px;vertical-align:middle;margin-right:4px"></span><strong>Green</strong> — substantive data declared</li>
+                    <li><span style="display:inline-block;width:10px;height:10px;background:#7a4010;border-radius:2px;vertical-align:middle;margin-right:4px"></span><strong>Orange</strong> — submitted but "nothing to declare" — active participation with no declared activity</li>
+                    <li><span style="display:inline-block;width:10px;height:10px;background:#1c1e2e;border:1px solid #3a3c50;border-radius:2px;vertical-align:middle;margin-right:4px"></span><strong>Dark</strong> — form absent from that submission</li>
+                </ul>
+
+                <h6 class="about-heading">Data extraction</h6>
+                <p>All structured information (facility names, locations, containment levels, organisational details)
+                was extracted from PDF documents by a <strong>large language model (Anthropic Claude Sonnet)</strong>.
+                Extraction confidence scores (0–1) are shown per facility where available. Errors and omissions
+                are possible, particularly for scanned or non-English submissions.</p>
+
+                <h6 class="about-heading">Geocoding</h6>
+                <p>Facility locations are geocoded using <strong>OpenStreetMap Nominatim</strong> from the address
+                and city fields declared in each submission. Match confidence is rated:</p>
+                <ul>
+                    <li><strong>High</strong> (importance &gt; 0.6) — specific building or address match</li>
+                    <li><strong>Medium</strong> (0.3–0.6) — neighbourhood or district match</li>
+                    <li><strong>Low</strong> (&lt; 0.3) — city-level or coarser; may be inaccurate by tens of kilometres</li>
+                </ul>
+                <p>Facilities without a geocodable address or city are <strong>not shown on the map</strong>
+                (~3% of records). Use the filter panel to hide low-confidence geocodes.</p>
 
                 <hr>
                 <p class="text-muted small">Data extracted and processed as part of academic research on BWC transparency.
                 Not an official UN or ISU product. All source documents are publicly available
                 at <a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Global compliance table modal ───────────────────────────────────── -->
+<div class="modal fade" id="global-table-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">All Countries — Submission Overview</h5>
+                <button type="button" id="gt-modal-close" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0" id="gt-tbody">
+                <div class="text-center py-4 text-muted">Loading…</div>
             </div>
         </div>
     </div>

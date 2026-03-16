@@ -19,6 +19,7 @@ Usage:
 import argparse
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -78,6 +79,53 @@ def _build_query(address: str | None, city: str | None,
     if iso2:
         parts.append(iso2.upper())
     return ", ".join(parts)
+
+
+def _address_variants(address: str | None,
+                      city: str | None) -> list[tuple[str | None, str | None]]:
+    """
+    Return an ordered list of (address, city) pairs to try with Nominatim,
+    from most specific to least.
+
+    Nominatim fails when an address starts with an organisation or department
+    name (e.g. "UK Health Security Agency, Porton Down, Salisbury, SP4 0JG").
+    This function progressively strips leading comma-separated components that
+    contain no digits (i.e. are likely org/department names rather than street
+    names or postcodes) until it reaches a numeric component, then appends a
+    city-only fallback.
+
+    Examples
+    --------
+    "UK Health Security Agency, Porton Down, Salisbury, SP4 0JG" →
+        tries: full, "Porton Down, Salisbury, SP4 0JG", city-only
+
+    "Dept of Virology, Medicum, P.O. Box 21, 00014 University of Helsinki" →
+        tries: full, "Medicum, P.O. Box 21, ...", "P.O. Box 21, ...", city-only
+    """
+    variants: list[tuple[str | None, str | None]] = []
+
+    if address:
+        parts = [p.strip() for p in address.split(",") if p.strip()]
+        for start in range(len(parts)):
+            addr = ", ".join(parts[start:])
+            variants.append((addr, city))
+            # Stop stripping once we reach a component containing a digit
+            # (street number, postcode, building number …)
+            if re.search(r"\d", parts[start]):
+                break
+
+    # City-only as the final fallback
+    if city:
+        variants.append((None, city))
+
+    # Deduplicate while preserving order
+    seen: set[tuple] = set()
+    deduped = []
+    for v in variants:
+        if v not in seen:
+            seen.add(v)
+            deduped.append(v)
+    return deduped
 
 
 def _geocode_one(query: str, country_iso3: str | None,
@@ -159,31 +207,28 @@ def geocode_table(
         city         = row["city"]
         country_iso3 = row["country_iso3"]
 
-        query = _build_query(address, city, country_iso3)
-        if not query:
+        # Build ordered list of (address, city) variants to try, from most
+        # specific to least (progressive org-name stripping + city fallback)
+        addr_variants = _address_variants(address, city)
+        if not addr_variants:
             log.debug("[%s id=%s] no address or city; skipping", table, row_id)
             skipped += 1
             continue
 
         attempted += 1
+        result = None
 
-        # Rate-limit
-        elapsed = time.time() - last_call
-        if elapsed < REQUEST_INTERVAL:
-            time.sleep(REQUEST_INTERVAL - elapsed)
-
-        result = _geocode_one(query, country_iso3, session)
-        last_call = time.time()
-
-        if result is None:
-            # Try again with city only (drop street address noise)
-            if address and city:
-                fallback_query = _build_query(None, city, country_iso3)
-                elapsed = time.time() - last_call
-                if elapsed < REQUEST_INTERVAL:
-                    time.sleep(REQUEST_INTERVAL - elapsed)
-                result = _geocode_one(fallback_query, country_iso3, session)
-                last_call = time.time()
+        for var_addr, var_city in addr_variants:
+            query = _build_query(var_addr, var_city, country_iso3)
+            if not query:
+                continue
+            elapsed = time.time() - last_call
+            if elapsed < REQUEST_INTERVAL:
+                time.sleep(REQUEST_INTERVAL - elapsed)
+            result = _geocode_one(query, country_iso3, session)
+            last_call = time.time()
+            if result is not None:
+                break
 
         if result is None:
             log.debug("[%s id=%s] no result for %r", table, row_id, query)
