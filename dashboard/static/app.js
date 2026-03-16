@@ -1267,6 +1267,14 @@ function initSearch() {
 const _LAYER_LABEL = { A1: 'Research', A2: 'Defence', G: 'Vaccine' };
 const _LAYER_COLOR = { A1: '#4a8ad4', A2: '#8b1a1a', G: '#0a7a6a' };
 
+// Highlight all occurrences of `term` within `text` (case-insensitive).
+// Returns an HTML string with matches wrapped in <mark>.
+function highlightTerm(text, term) {
+    if (!term || !text) return esc(text || '');
+    const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    return esc(text).replace(re, m => `<mark class="sr-hl">${m}</mark>`);
+}
+
 async function doSearch(q) {
     const input   = document.getElementById('search-input');
     const results = document.getElementById('search-results');
@@ -1278,14 +1286,28 @@ async function doSearch(q) {
             : data.map((f, i) => {
                 const layerColor = _LAYER_COLOR[f.layer] || '#4a8ad4';
                 const layerLabel = _LAYER_LABEL[f.layer] || f.layer;
+                const isActivity = f.match_type === 'activity';
                 const onclick = f.id
                     ? `selectSearchResult('${f.id}','${f.country_iso3}','${f.layer}')`
                     : `selectCountry('${f.country_iso3}')`;
+
+                // For activity matches show a short snippet of the matched text
+                let snippetHtml = '';
+                if (isActivity && f.activity_snippet) {
+                    const snippet = f.activity_snippet.length > 120
+                        ? f.activity_snippet.slice(0, 120) + '…'
+                        : f.activity_snippet;
+                    snippetHtml = `<div class="sr-snippet">${highlightTerm(snippet, q)}</div>`;
+                }
+
+                const tagHtml = isActivity
+                    ? `<span class="sr-tag sr-tag-activity">activity</span>`
+                    : `<span class="sr-tag" style="color:${layerColor}">${layerLabel}</span>`;
+
                 return `<li data-idx="${i}" onclick="${onclick}">
-                    <div>${esc(f.name || '[Unnamed]')}
-                        <span style="float:right;font-size:10px;color:${layerColor}">${layerLabel}</span>
-                    </div>
+                    <div>${highlightTerm(f.name || '[Unnamed]', q)} ${tagHtml}</div>
                     <div class="sr-meta">${esc(f.country_name || f.country_iso3)}</div>
+                    ${snippetHtml}
                 </li>`;
               }).join('');
         results.classList.add('open');
@@ -1443,14 +1465,39 @@ function renderTrendsChart(d) {
     const xScale = year  => pad.left + ((year - minYear) / yearRange) * innerW;
     const yScale = value => pad.top  + (1 - value / maxVal) * innerH;
 
-    // Build polylines
+    // Identify gap regions: consecutive year pairs where gap > 1 year.
+    // Rendered as a shaded band so the viewer sees data is absent — not interpolated.
+    let gapRects = '';
+    for (let i = 0; i < years.length - 1; i++) {
+        if (years[i + 1] - years[i] > 1) {
+            const x1 = xScale(years[i]).toFixed(1);
+            const x2 = xScale(years[i + 1]).toFixed(1);
+            const midX = ((+x1 + +x2) / 2).toFixed(1);
+            const midY = (pad.top + innerH / 2).toFixed(1);
+            gapRects +=
+                `<rect x="${x1}" y="${pad.top}" width="${(+x2 - +x1).toFixed(1)}" height="${innerH}" fill="url(#gap-hatch)" opacity="0.35"/>` +
+                `<line x1="${x1}" y1="${pad.top}" x2="${x1}" y2="${pad.top + innerH}" stroke="#bbb" stroke-width="1" stroke-dasharray="3,3"/>` +
+                `<line x1="${x2}" y1="${pad.top}" x2="${x2}" y2="${pad.top + innerH}" stroke="#bbb" stroke-width="1" stroke-dasharray="3,3"/>` +
+                `<text x="${midX}" y="${midY}" text-anchor="middle" font-size="9" fill="#aaa" ` +
+                `transform="rotate(-90,${midX},${midY})">no public data</text>`;
+        }
+    }
+
+    // Build polylines — broken into separate segments at each gap so no line is
+    // drawn through years with no data (which would imply interpolation).
     const polylines = series.map(s => {
         const vals = d[s.key] || [];
-        const pts = years
-            .map((yr, i) => vals[i] != null ? `${xScale(yr).toFixed(1)},${yScale(vals[i]).toFixed(1)}` : null)
-            .filter(Boolean)
-            .join(' ');
-        return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>`;
+        const segments = [];
+        let current = [];
+        for (let i = 0; i < years.length; i++) {
+            if (vals[i] == null) { if (current.length) { segments.push(current); current = []; } continue; }
+            if (current.length && years[i] - years[i - 1] > 1) { segments.push(current); current = []; }
+            current.push(`${xScale(years[i]).toFixed(1)},${yScale(vals[i]).toFixed(1)}`);
+        }
+        if (current.length) segments.push(current);
+        return segments
+            .map(pts => `<polyline points="${pts.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>`)
+            .join('');
     });
 
     // X-axis tick marks (every 5 years)
@@ -1474,7 +1521,14 @@ function renderTrendsChart(d) {
         `<line x1="${pad.left}" y1="${pad.top + innerH}" x2="${pad.left + innerW}" y2="${pad.top + innerH}" stroke="#ccc"/>`;
 
     const svg = `<svg class="trends-chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-        ${axes}${xTicks}${yTicks}${polylines.join('')}
+        <defs>
+          <pattern id="gap-hatch" x="0" y="0" width="8" height="8" patternUnits="userSpaceOnUse">
+            <line x1="0" y1="8" x2="8" y2="0" stroke="#999" stroke-width="0.8"/>
+            <line x1="-2" y1="2" x2="2" y2="-2" stroke="#999" stroke-width="0.8"/>
+            <line x1="6" y1="10" x2="10" y2="6" stroke="#999" stroke-width="0.8"/>
+          </pattern>
+        </defs>
+        ${axes}${gapRects}${xTicks}${yTicks}${polylines.join('')}
     </svg>`;
 
     // Legend

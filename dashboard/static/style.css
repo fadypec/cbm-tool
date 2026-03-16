@@ -32,6 +32,21 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
     text-align: center;
 }
 
+/* ── Navbar About button ────────────────────────────────────────────────── */
+#navbar-about {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid #2a2a3a;
+    border-radius: 5px;
+    color: #6070a0;
+    font-size: 12px;
+    padding: 4px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+}
+#navbar-about:hover { color: #c0ccf0; border-color: #4a4a6a; }
+
 /* ── Search ─────────────────────────────────────────────────────────────── */
 #search-wrap {
     position: relative;
@@ -77,6 +92,13 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 #search-results li:last-child { border-bottom: none; }
 #search-results li:hover { background: #252840; }
 .sr-meta { color: #6070a0; font-size: 11px; margin-top: 2px; }
+/* Activity-match snippet shown below facility name in search results */
+.sr-snippet { color: #7888b8; font-size: 11px; margin-top: 3px; line-height: 1.4; font-style: italic; }
+/* Highlighted search term within name or snippet */
+mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0 1px; }
+/* Layer / match-type tag (float right) */
+.sr-tag { float: right; font-size: 10px; margin-left: 6px; }
+.sr-tag-activity { color: #7a9a50; }
 
 /* ── Main layout ────────────────────────────────────────────────────────── */
 #main { display: flex; height: calc(100vh - 54px); }

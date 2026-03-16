@@ -8,11 +8,11 @@ applies known manual merge groups to consolidate them.
 
 FEATURE 1: Entity deduplication script
 
-Default: --dry-run (print what would change, no DB writes).
+Default behaviour is dry-run (print what would change, no DB writes).
 Pass --apply to actually execute the merges.
 
 Usage:
-    python scripts/dedup_entities.py            # dry-run
+    python scripts/dedup_entities.py            # dry-run (no flags needed)
     python scripts/dedup_entities.py --apply    # execute merges
 """
 
@@ -134,11 +134,11 @@ def apply_merge(cur, keeper_id: str, deprecated_ids: list[str], new_name: str) -
 
     # FEATURE 1: Step 2 — compute updated years_declared for the keeper
     cur.execute("""
-        SELECT ARRAY_AGG(DISTINCT year ORDER BY year)
+        SELECT ARRAY_AGG(DISTINCT year ORDER BY year) AS years
         FROM   facility_years
         WHERE  canonical_facility_id = %s
     """, (keeper_id,))
-    new_years = cur.fetchone()[0] or []
+    new_years = cur.fetchone()["years"] or []
 
     # FEATURE 1: Step 3 — update the keeper entity with merged names + years
     all_names_list = sorted(combined_names)

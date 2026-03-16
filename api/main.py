@@ -559,8 +559,12 @@ def api_map_compliance():
 
 # ── /api/search ───────────────────────────────────────────────────────────────
 
-@app.get("/api/search", summary="Search facilities by name (max 20 results)")
-def api_search(q: str = Query(default="", min_length=2, description="Substring to search")):
+@app.get("/api/search", summary="Search facilities by name or declared activity/organisms (max 20 results)")
+def api_search(q: str = Query(default="", min_length=2, description="Substring to search in names and activity descriptions")):
+    """Searches facility names, all_names aliases, and the free-text agents_summary
+    (declared organisms and research activities) from Form A1 records.
+    Returns match_type ('name' or 'activity') and an activity_snippet when the
+    match was found in the activity field rather than the facility name."""
     with cursor() as cur:
         like = f"%{q}%"
         cur.execute("""
@@ -573,7 +577,20 @@ def api_search(q: str = Query(default="", min_length=2, description="Substring t
                 'A1'                           AS layer,
                 (SELECT country_name FROM documents
                  WHERE  country_iso3 = f.country_iso3
-                 AND    country_name IS NOT NULL LIMIT 1) AS country_name
+                 AND    country_name IS NOT NULL LIMIT 1) AS country_name,
+                -- Distinguish name matches from activity/organism text matches
+                CASE
+                  WHEN f.canonical_name ILIKE %s
+                    OR EXISTS (SELECT 1 FROM unnest(f.all_names) AS n(name) WHERE n.name ILIKE %s)
+                  THEN 'name'
+                  ELSE 'activity'
+                END AS match_type,
+                -- For activity matches: return a snippet of the most recent matching text
+                (SELECT LEFT(fy2.agents_summary, 200)
+                 FROM facility_years fy2
+                 WHERE fy2.canonical_facility_id = f.canonical_facility_id
+                   AND fy2.agents_summary ILIKE %s
+                 ORDER BY fy2.year DESC LIMIT 1) AS activity_snippet
             FROM facilities f
             WHERE f.canonical_name ILIKE %s
                OR EXISTS (
@@ -595,7 +612,9 @@ def api_search(q: str = Query(default="", min_length=2, description="Substring t
                 'G'                            AS layer,
                 (SELECT country_name FROM documents
                  WHERE  country_iso3 = vf.country_iso3
-                 AND    country_name IS NOT NULL LIMIT 1) AS country_name
+                 AND    country_name IS NOT NULL LIMIT 1) AS country_name,
+                'name'                         AS match_type,
+                NULL::text                     AS activity_snippet
             FROM vaccine_facilities vf
             WHERE vf.canonical_name ILIKE %s
             UNION ALL
@@ -608,12 +627,14 @@ def api_search(q: str = Query(default="", min_length=2, description="Substring t
                 'A2'                           AS layer,
                 (SELECT country_name FROM documents
                  WHERE  country_iso3 = df.country_iso3
-                 AND    country_name IS NOT NULL LIMIT 1) AS country_name
+                 AND    country_name IS NOT NULL LIMIT 1) AS country_name,
+                'name'                         AS match_type,
+                NULL::text                     AS activity_snippet
             FROM defence_facilities df
             WHERE df.facility_name ILIKE %s
             ORDER BY name NULLS LAST
             LIMIT 20
-        """, (like, like, like, like, like))
+        """, (like, like, like, like, like, like, like, like))
         return _json([dict(r) for r in cur.fetchall()])
 
 
@@ -715,6 +736,8 @@ def api_stats_timeline():
             FROM facility_years fy
             JOIN documents d ON d.id = fy.document_id
             WHERE fy.year IS NOT NULL
+              -- Exclude the current calendar year: CBMs for it haven't arrived yet
+              AND fy.year < EXTRACT(YEAR FROM CURRENT_DATE)::int
             GROUP BY fy.year
             ORDER BY fy.year
         """)

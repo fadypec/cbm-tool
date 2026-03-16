@@ -23,9 +23,10 @@
     <span id="app-title">CBM Facility Explorer</span>
     <span id="stats-bar"></span>
     <div id="search-wrap">
-        <input id="search-input" type="text" placeholder="Search facilities…" autocomplete="off">
+        <input id="search-input" type="text" placeholder="Search facilities, organisms…" autocomplete="off">
         <ul id="search-results"></ul>
     </div>
+    <button id="navbar-about" data-bs-toggle="modal" data-bs-target="#about-modal">About</button>
 </nav>
 
 <!-- ── Main ────────────────────────────────────────────────────────────── -->
@@ -187,7 +188,6 @@
                     <button class="fp-btn" onclick="showGlobalTable()">⊞ All countries</button>
                     <!-- FEATURE 5: Trends button -->
                     <button class="fp-btn" onclick="showTrends()">📈 Trends</button>
-                    <button class="fp-btn" data-bs-toggle="modal" data-bs-target="#about-modal">ℹ About</button>
                 </div>
 
             </div><!-- /fp-body -->
@@ -281,6 +281,11 @@
                 </ul>
                 <p>Facilities without a geocodable address or city are <strong>not shown on the map</strong>
                 (~3% of records). Use the filter panel to hide low-confidence geocodes.</p>
+
+                <h6 class="about-heading">Programmatic access</h6>
+                <p>The underlying data is accessible via a REST API. Interactive documentation
+                (including all endpoints and query parameters) is available at
+                <a href="/api/docs" target="_blank">/api/docs</a>.</p>
 
                 <hr>
                 <p class="text-muted small">Data extracted and processed as part of academic research on BWC transparency.
