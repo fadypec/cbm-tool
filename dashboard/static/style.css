@@ -581,3 +581,94 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 .flag-btn { background: none; border: 1px solid #c0392b; color: #c0392b; border-radius: 3px; font-size: 10px; padding: 1px 6px; cursor: pointer; transition: background 0.15s; }
 .flag-btn:hover { background: #fde8e8; }
 .flag-badge { display: inline-block; background: #5a1010; color: #e08080; border-radius: 3px; font-size: 10px; padding: 1px 6px; margin-left: 6px; }
+
+/* ── About modal byline ─────────────────────────────────────────────────── */
+.about-byline {
+    text-align: center;
+    font-size: 13px;
+    color: #555;
+    padding: 6px 0 12px;
+    border-bottom: 1px solid #e8eaf0;
+    margin-bottom: 16px;
+}
+.about-byline a { color: #2471a3; text-decoration: none; font-weight: 500; }
+.about-byline a:hover { text-decoration: underline; }
+
+/* ── Legend collapsible header ──────────────────────────────────────────── */
+.leg-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+.leg-header-title { font-size: 10px; font-weight: 700; color: #555; letter-spacing: 0.06em; }
+.leg-toggle {
+    background: none;
+    border: none;
+    font-size: 11px;
+    color: #888;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+}
+.leg-toggle:hover { color: #333; }
+
+/* ── Mobile overlay backdrop ────────────────────────────────────────────── */
+#mobile-overlay {
+    display: none;
+    position: fixed;
+    top: 54px; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 1999;
+}
+#mobile-overlay.show { display: block; }
+
+/* ── Mobile responsive ──────────────────────────────────────────────────── */
+@media (max-width: 767px) {
+
+    /* Navbar: hide stats bar, let search fill available space */
+    #stats-bar   { display: none; }
+    #search-wrap { flex: 1; width: auto; min-width: 0; }
+    #app-title   { font-size: 13px; }
+
+    /* Sidebar: fixed overlay sliding in from left */
+    #sidebar {
+        position: fixed;
+        top: 54px;
+        left: 0;
+        height: calc(100% - 54px);
+        width: min(300px, 85vw) !important;
+        z-index: 2000;
+        transform: translateX(0);
+        transition: transform 0.25s ease;
+        border-right: 1px solid #2a2a3a;
+    }
+    #sidebar.collapsed {
+        width: min(300px, 85vw) !important; /* keep width; slide out instead */
+        transform: translateX(-100%);
+    }
+
+    /* Sidebar tab: floating hamburger over the map */
+    #sidebar-tab {
+        position: fixed;
+        top: 64px;
+        left: 10px;
+        z-index: 2001;
+        border: 1px solid #3a3a5a;
+        border-radius: 6px;
+        padding: 7px 10px;
+        background: rgba(15, 17, 23, 0.92);
+        font-size: 13px;
+        margin: 0;
+        align-self: auto;
+    }
+
+    /* Map: full width, full remaining height */
+    #map { flex: 1; width: 100%; }
+
+    /* Filter panel: wider on mobile, collapsed by default (handled in JS) */
+    #filter-panel { width: calc(100vw - 20px); max-width: 300px; }
+
+    /* Legend: hidden on mobile (too much screen real estate) */
+    .map-legend { display: none; }
+}

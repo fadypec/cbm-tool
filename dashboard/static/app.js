@@ -86,6 +86,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     const fp = document.getElementById('filter-panel');
     L.DomEvent.disableClickPropagation(fp);
     L.DomEvent.disableScrollPropagation(fp);
+
+    // Mobile: start with sidebar and filter panel collapsed
+    if (window.innerWidth < 768) {
+        const sb  = document.getElementById('sidebar');
+        const tab = document.getElementById('sidebar-tab');
+        sb.classList.add('collapsed');
+        tab.textContent = '▶';
+        tab.title = 'Expand sidebar';
+        if (!filterCollapsed) toggleFilterPanel();
+    }
 });
 
 // ── API ────────────────────────────────────────────────────────────────────
@@ -98,17 +108,36 @@ async function api(url) {
 
 // ── Stats bar ──────────────────────────────────────────────────────────────
 
+let _stats = null; // kept so updateStatsBar() can re-render after layer toggles
+
 function renderStats(s) {
+    _stats = s;
     document.getElementById('stats-bar').innerHTML =
-        `${s.total_unique_facilities.toLocaleString()} research facilities &nbsp;·&nbsp; ` +
-        `${s.total_countries} countries &nbsp;·&nbsp; ` +
-        `${s.total_submissions} submissions &nbsp;·&nbsp; ` +
-        `${s.year_min}–${s.year_max}`;
-    // FEATURE 10: populate dynamic counts in the about modal
-    const subEl  = document.getElementById('about-sub-count');
-    const cntEl  = document.getElementById('about-country-count');
-    if (subEl)  subEl.textContent  = s.total_submissions;
-    if (cntEl)  cntEl.textContent  = s.total_countries;
+        `<span id="stat-a1">${s.total_unique_facilities.toLocaleString()} research</span>` +
+        `<span id="stat-a1-sep">&nbsp;·&nbsp;</span>` +
+        `<span id="stat-a2">${(s.total_unique_defence || 0).toLocaleString()} defence</span>` +
+        `<span id="stat-a2-sep">&nbsp;·&nbsp;</span>` +
+        `<span id="stat-g">${(s.total_unique_vaccine || 0).toLocaleString()} vaccine</span>` +
+        `<span id="stat-g-sep">&nbsp;·&nbsp;</span>` +
+        `${s.total_countries} countries`;
+    // populate About modal dynamic counts
+    const subEl = document.getElementById('about-sub-count');
+    const cntEl = document.getElementById('about-country-count');
+    if (subEl) subEl.textContent = s.total_submissions;
+    if (cntEl) cntEl.textContent = s.total_countries;
+    updateStatsBar();
+}
+
+// Show/hide per-layer counts in the stats bar to match the active layer checkboxes.
+function updateStatsBar() {
+    if (!_stats) return;
+    [['A1','a1'], ['A2','a2'], ['G','g']].forEach(([layer, key]) => {
+        const el  = document.getElementById(`stat-${key}`);
+        const sep = document.getElementById(`stat-${key}-sep`);
+        const show = STATE.layers[layer];
+        if (el)  el.style.display  = show ? '' : 'none';
+        if (sep) sep.style.display = show ? '' : 'none';
+    });
 }
 
 // ── Map ────────────────────────────────────────────────────────────────────
@@ -258,11 +287,20 @@ function buildPopup(layer, feature) {
 
 function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
-    const tab = document.getElementById('sidebar-tab');
+    const tab     = document.getElementById('sidebar-tab');
+    const overlay = document.getElementById('mobile-overlay');
     const collapsed = sidebar.classList.toggle('collapsed');
     tab.textContent = collapsed ? '▶' : '◀';
     tab.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    if (overlay) overlay.classList.toggle('show', !collapsed);
     setTimeout(() => map && map.invalidateSize(), 260);
+}
+
+// On mobile, open the sidebar if it is currently collapsed (e.g. after tapping a map marker).
+function ensureSidebarOpen() {
+    if (window.innerWidth < 768 && document.getElementById('sidebar').classList.contains('collapsed')) {
+        toggleSidebar();
+    }
 }
 
 function toggleFilterPanel() {
@@ -292,6 +330,7 @@ function onFilterChange() {
     STATE.hideLow = document.getElementById('hide-low').checked;
 
     applyFilters();
+    updateStatsBar();
 }
 
 function onAllYearsToggle() {
@@ -708,6 +747,11 @@ function addLegend() {
             const sq  = (c) => `<span class="legend-sq"  style="background:${c}"></span>`;
             const hatch = `<span class="legend-sq legend-hatch"></span>`;
             div.innerHTML =
+                `<div class="leg-header">
+                    <span class="leg-header-title">Legend</span>
+                    <button class="leg-toggle" onclick="toggleLegend(this)" title="Hide legend">▼</button>
+                </div>` +
+                `<div class="leg-body">` +
                 `<div class="leg-title">RESEARCH (BSL LEVEL)</div>` +
                 [['BSL-4','#c0392b'],['BSL-3','#e67e22'],['BSL-2','#f39c12'],['BSL-1','#27ae60'],['Unknown','#95a5a6']]
                     .map(([l,c]) => `<div>${dot(c)}${l}</div>`).join('') +
@@ -722,11 +766,20 @@ function addLegend() {
                 `<div>${sq('#5c3370')}Restricted (CHN/FRA/RUS/IND)</div>` +
                 `<div>${sq('#b8bdd0')}State party — no public CBM</div>` +
                 `<div>${sq('#d4b870')}Signatory (not ratified)</div>` +
-                `<div>${hatch}Non-member</div>`;
+                `<div>${hatch}Non-member</div>` +
+                `</div>`;
             return div;
         },
     });
     new LegendControl({ position: 'bottomright' }).addTo(map);
+}
+
+function toggleLegend(btn) {
+    const body = btn.closest('.map-legend').querySelector('.leg-body');
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? '' : 'none';
+    btn.textContent = hidden ? '▼' : '▲';
+    btn.title = hidden ? 'Hide legend' : 'Show legend';
 }
 
 // ── Sidebar panel switcher ─────────────────────────────────────────────────
@@ -758,6 +811,7 @@ function renderCountryList(countries) {
 // ── Country detail ─────────────────────────────────────────────────────────
 
 async function selectCountry(iso3) {
+    ensureSidebarOpen();
     _currentIso3 = iso3;
     document.querySelectorAll('.country-item').forEach(el =>
         el.classList.toggle('active', el.dataset.iso3 === iso3)

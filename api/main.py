@@ -127,6 +127,10 @@ def api_stats():
                 (SELECT count(*)             FROM facility_years WHERE geom IS NOT NULL)            AS geocoded_facility_years,
                 (SELECT count(*)             FROM vaccine_facility_years)                           AS vaccine_facility_years,
                 (SELECT count(*)             FROM defence_facilities)                               AS defence_facility_years,
+                (SELECT count(*)             FROM vaccine_facilities)                               AS total_unique_vaccine,
+                (SELECT count(DISTINCT canonical_defence_facility_id)
+                 FROM   defence_facilities
+                 WHERE  canonical_defence_facility_id IS NOT NULL)                                  AS total_unique_defence,
                 (SELECT min(year)            FROM documents WHERE NOT is_amendment)                 AS year_min,
                 (SELECT max(year)            FROM documents WHERE NOT is_amendment)                 AS year_max
         """)
