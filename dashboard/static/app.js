@@ -33,6 +33,8 @@ let map;
 let choroLayer    = null;
 let complianceRates = {};   // iso3 → {a1_rate, submission_count}
 let entityModal   = null;
+// FEATURE 4: which form the choropleth is currently showing
+let choroForm     = 'A1';
 let filterCollapsed = false;
 let searchTimer   = null;
 let _countriesData  = [];   // full /api/countries response, for global table
@@ -102,6 +104,11 @@ function renderStats(s) {
         `${s.total_countries} countries &nbsp;·&nbsp; ` +
         `${s.total_submissions} submissions &nbsp;·&nbsp; ` +
         `${s.year_min}–${s.year_max}`;
+    // FEATURE 10: populate dynamic counts in the about modal
+    const subEl  = document.getElementById('about-sub-count');
+    const cntEl  = document.getElementById('about-country-count');
+    if (subEl)  subEl.textContent  = s.total_submissions;
+    if (cntEl)  cntEl.textContent  = s.total_countries;
 }
 
 // ── Map ────────────────────────────────────────────────────────────────────
@@ -233,10 +240,16 @@ function buildPopup(layer, feature) {
         ? `<br><a class="popup-link" href="#" onclick="showEntityModal('${p.id}');return false;">Full history →</a>`
         : '';
 
+    // FEATURE 2: agents preview line in popup (A1 only)
+    const agentsLine = (layer === 'A1' && p.agents_summary)
+        ? `<div style="color:#6a8070;font-size:11px;margin-top:3px">${esc(p.agents_summary.slice(0, 80))}${p.agents_summary.length > 80 ? '…' : ''}</div>`
+        : '';
+
     return `<div class="fac-popup">
         <strong>${esc(p.name || 'Unnamed facility')}</strong>
         <div class="popup-loc">${esc(loc)}</div>
         ${badge} <small style="color:#888;margin-left:4px">declared ${p.year}</small>
+        ${agentsLine}
         ${historyLink}
     </div>`;
 }
@@ -427,12 +440,15 @@ function initYearSlider(minYear, maxYear) {
 // ── CSV Export ─────────────────────────────────────────────────────────────
 
 function exportCSV() {
+    // FEATURE 3: added agents_summary column; filename encodes active layers
     const header = ['layer', 'id', 'name', 'country_iso3', 'country_name', 'year',
-                    'containment', 'city', 'geocode_conf', 'lat', 'lon'];
+                    'containment', 'city', 'geocode_conf', 'lat', 'lon', 'agents_summary'];
     const rows = [header];
 
+    const activeLayers = [];
     for (const layer of ['A1', 'A2', 'G']) {
         if (!STATE.layers[layer] || !DATA[layer]) continue;
+        activeLayers.push(layer);
         DATA[layer].features
             .filter(f => matchesFilter(layer, f))
             .forEach(f => {
@@ -443,6 +459,7 @@ function exportCSV() {
                     p.id, p.name, p.country_iso3, p.country_name, p.year,
                     p.containment || '', p.city || '', p.geocode_conf || '',
                     lat.toFixed(5), lon.toFixed(5),
+                    p.agents_summary || '',   // FEATURE 3: agents column
                 ]);
             });
     }
@@ -451,9 +468,12 @@ function exportCSV() {
         r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
     ).join('\n');
 
+    // FEATURE 3: filename encodes active layers (e.g. cbm-A1-G-2023.csv)
+    const layerStr = activeLayers.join('-');
+    const yearStr  = STATE.year ? '-' + STATE.year : '';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = `cbm-facilities${STATE.year ? '-' + STATE.year : ''}.csv`;
+    a.download = `cbm-${layerStr}${yearStr}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
 }
@@ -531,9 +551,87 @@ function choroColor(rate) {
     return '#f5f5f5';
 }
 
+// FEATURE 4: Stored world GeoJSON so updateChoropleth() can re-render without re-fetching
+let _worldGeoJSON = null;
+
+/**
+ * FEATURE 4: Apply a new set of compliance rates to the existing choropleth layer.
+ * Updates both fill colours and tooltips. Called on initial load and on form change.
+ * @param {Object} rates - Map of iso3 → {a1_rate, submission_count, country_name}
+ */
+function updateChoropleth(rates) {
+    if (!choroLayer) return;
+    choroLayer.eachLayer(layer => {
+        const feature = layer.feature;
+        const iso3 = feature.properties['ISO3166-1-Alpha-3'];
+        const name = feature.properties.name;
+        const isRestricted = RESTRICTED.has(iso3) || RESTRICTED_NAMES.has(name);
+
+        if (!isRestricted) {
+            const d = rates[iso3];
+            let newStyle;
+            if (d) {
+                newStyle = { fillColor: choroColor(+d.a1_rate), fillOpacity: 0.55, weight: 0.5, color: '#aaa', opacity: 0.6 };
+            } else if (BWC_NON_PARTIES.has(iso3)) {
+                newStyle = { fillColor: 'url(#country-hatch)', fillOpacity: 1, weight: 0.5, color: '#bbb', opacity: 0.5 };
+            } else if (BWC_SIGNATORIES.has(iso3)) {
+                newStyle = { fillColor: '#d4b870', fillOpacity: 0.35, weight: 0.6, color: '#b09040', opacity: 0.6 };
+            } else {
+                newStyle = { fillColor: '#b8bdd0', fillOpacity: 0.40, weight: 0.5, color: '#8890a0', opacity: 0.6 };
+            }
+            layer.setStyle(newStyle);
+
+            // Update tooltip
+            const d2 = rates[iso3];
+            let bwcStatus;
+            if (d2) {
+                bwcStatus = `${d2.submission_count} public submission${d2.submission_count !== 1 ? 's' : ''}`;
+            } else if (BWC_NON_PARTIES.has(iso3)) {
+                bwcStatus = 'Not a BWC member';
+            } else if (BWC_SIGNATORIES.has(iso3)) {
+                bwcStatus = 'BWC signatory (signed, not ratified)';
+            } else {
+                bwcStatus = 'BWC state party — no public CBM data';
+            }
+            layer.setTooltipContent(`<strong>${name}</strong><br><small style="color:#888">${bwcStatus}</small>`);
+        }
+    });
+
+    // FEATURE 4: update legend title to reflect current form
+    const legendEl = document.querySelector('.map-legend');
+    if (legendEl) {
+        const titleEl = [...legendEl.querySelectorAll('.leg-title')]
+            .find(el => el.textContent.includes('SUBMISSION RATE'));
+        if (titleEl) titleEl.textContent = `SUBMISSION RATE (FORM ${choroForm})`;
+    }
+}
+
+/**
+ * FEATURE 4: Called when the choropleth form selector changes.
+ * Fetches new compliance rates and re-renders the choropleth.
+ */
+async function onChoroFormChange() {
+    const sel = document.getElementById('choro-form-select');
+    if (!sel) return;
+    choroForm = sel.value;
+    try {
+        const newRates = await api(`/api/map/compliance/${choroForm}`);
+        const rateMap = {};
+        newRates.forEach(c => { rateMap[c.country_iso3] = c; });
+        // Update the global complianceRates (used by choropleth click handlers and subtitle)
+        Object.assign(complianceRates, rateMap);
+        updateChoropleth(rateMap);
+    } catch (e) {
+        console.warn('Failed to fetch compliance for form', choroForm, e);
+    }
+}
+
 async function loadChoropleth() {
     try {
-        const world = await fetch('/static/countries.geojson').then(r => r.json());
+        if (!_worldGeoJSON) {
+            _worldGeoJSON = await fetch('/static/countries.geojson').then(r => r.json());
+        }
+        const world = _worldGeoJSON;
 
         choroLayer = L.geoJSON(world, {
             style: feature => {
@@ -616,7 +714,7 @@ function addLegend() {
                 `<div class="leg-title">OTHER LAYERS</div>` +
                 `<div>${dot('#8b1a1a')}Defence (A2)</div>` +
                 `<div>${dot('#0a7a6a')}Vaccine (G)</div>` +
-                `<div class="leg-title">FORM A1 SUBMISSION RATE</div>` +
+                `<div class="leg-title">SUBMISSION RATE (FORM ${choroForm})</div>` +
                 [['>80%','#08519c'],['60–80%','#2171b5'],['40–60%','#4292c6'],
                  ['20–40%','#9ecae1'],['1–20%','#deebf7']]
                     .map(([l,c]) => `<div>${sq(c)}${l}</div>`).join('') +
@@ -795,14 +893,23 @@ function renderFacilityList(facilities) {
         const yrs = f.years_declared
             ? `${f.years_declared.length} year${f.years_declared.length !== 1 ? 's' : ''}`
             : '';
+        // FEATURE 7: source link in facility list
+        const sourceLink = f.latest_source_url
+            ? `<a href="${esc(f.latest_source_url)}" target="_blank" class="popup-link" style="font-size:10px;margin-left:6px">source ↗</a>`
+            : '';
+        // FEATURE 2: agents second meta line (truncated to 60 chars)
+        const agentsMeta = f.agents_summary
+            ? `<div class="fac-meta" style="color:#5a6a50">${esc(f.agents_summary.slice(0, 60))}${f.agents_summary.length > 60 ? '…' : ''}</div>`
+            : '';
         return `
             <div class="fac-item" onclick="showEntityModal('${f.canonical_facility_id}')">
                 <div class="fac-name">${esc(f.canonical_name || '[Unnamed facility]')}</div>
                 <div class="fac-meta">
                     ${f.latest_containment
                         ? `<span style="color:${bslColor(f.latest_containment)}">${esc(f.latest_containment)}</span> &nbsp;·&nbsp; `
-                        : ''}${yrs}
+                        : ''}${yrs}${sourceLink}
                 </div>
+                ${agentsMeta}
             </div>`;
     }).join('');
 }
@@ -1089,6 +1196,12 @@ function renderEntityModal(data) {
             ['Agents / activities', yr.agents_summary],
         ].filter(([, v]) => v);
 
+        // FEATURE 8: flag button / badge per year-record
+        const flagUI = yr.flagged_for_review
+            ? `<span class="flag-badge">🚩 Flagged${yr.flag_note ? ': ' + esc(yr.flag_note) : ''}</span>
+               <button class="flag-btn ms-2" onclick="unflagFacility('${esc(data.canonical_facility_id)}',${yr.year})">Unflag</button>`
+            : `<button class="flag-btn" onclick="flagFacility('${esc(data.canonical_facility_id)}',${yr.year})">Flag for review</button>`;
+
         return `
             <div class="year-record">
                 <div class="yr-head">${yr.year}
@@ -1097,6 +1210,7 @@ function renderEntityModal(data) {
                         : `<small class="text-muted fw-normal ms-2">${esc(yr.document_id)}</small>`}
                     ${yr.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(yr.confidence * 100)}%</small>` : ''}
                     ${yr.geocode_confidence ? `<small class="text-muted fw-normal ms-2">geocode: ${yr.geocode_confidence}</small>` : ''}
+                    ${flagUI}
                 </div>
                 <dl class="yr-kv">
                     ${kvs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join('')}
@@ -1280,6 +1394,131 @@ function renderGlobalTable(rows, sortCol, sortDir) {
 
     html += '</tbody></table>';
     document.getElementById('gt-tbody').innerHTML = html;
+}
+
+// ── FEATURE 5: Longitudinal trends chart ──────────────────────────────────────
+
+async function showTrends() {
+    const modalEl = document.getElementById('trends-modal');
+    if (!modalEl) return;
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    document.getElementById('trends-body').innerHTML =
+        '<div class="text-center py-4 text-muted">Loading…</div>';
+    modal.show();
+    try {
+        const d = await api('/api/stats/timeline');
+        document.getElementById('trends-body').innerHTML = renderTrendsChart(d);
+    } catch (e) {
+        document.getElementById('trends-body').innerHTML =
+            '<div class="text-danger">Failed to load timeline data.</div>';
+    }
+}
+
+/**
+ * FEATURE 5: Render a self-contained SVG line chart for the trends modal.
+ * No external library — pure SVG with hand-computed coordinates.
+ */
+function renderTrendsChart(d) {
+    const W = 580, H = 260;
+    const pad = { top: 20, right: 20, bottom: 40, left: 50 };
+    const innerW = W - pad.left - pad.right;
+    const innerH = H - pad.top - pad.bottom;
+
+    const years = d.years || [];
+    if (!years.length) return '<p class="text-muted">No data.</p>';
+
+    const series = [
+        { key: 'a1_facility_years',   label: 'Research facility-years', color: '#4a8ad4' },
+        { key: 'bsl4_facility_years', label: 'BSL-4 facility-years',    color: '#c0392b' },
+        { key: 'submitting_countries',label: 'Submitting countries',     color: '#27ae60' },
+    ];
+
+    // Compute extents
+    const allVals = series.flatMap(s => d[s.key] || []).filter(v => v != null);
+    const maxVal  = Math.max(...allVals, 1);
+    const minYear = Math.min(...years);
+    const maxYear = Math.max(...years);
+    const yearRange = maxYear - minYear || 1;
+
+    const xScale = year  => pad.left + ((year - minYear) / yearRange) * innerW;
+    const yScale = value => pad.top  + (1 - value / maxVal) * innerH;
+
+    // Build polylines
+    const polylines = series.map(s => {
+        const vals = d[s.key] || [];
+        const pts = years
+            .map((yr, i) => vals[i] != null ? `${xScale(yr).toFixed(1)},${yScale(vals[i]).toFixed(1)}` : null)
+            .filter(Boolean)
+            .join(' ');
+        return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>`;
+    });
+
+    // X-axis tick marks (every 5 years)
+    const xTicks = years.filter(y => y % 5 === 0).map(y =>
+        `<line x1="${xScale(y).toFixed(1)}" y1="${pad.top + innerH}" x2="${xScale(y).toFixed(1)}" y2="${pad.top + innerH + 5}" stroke="#ccc"/>` +
+        `<text x="${xScale(y).toFixed(1)}" y="${pad.top + innerH + 16}" text-anchor="middle" font-size="10" fill="#777">${y}</text>`
+    ).join('');
+
+    // Y-axis ticks (4 ticks)
+    const ySteps = 4;
+    const yTicks = Array.from({length: ySteps + 1}, (_, i) => {
+        const v = Math.round((maxVal / ySteps) * i);
+        const y = yScale(v).toFixed(1);
+        return `<line x1="${pad.left - 4}" y1="${y}" x2="${pad.left}" y2="${y}" stroke="#ccc"/>` +
+               `<text x="${pad.left - 6}" y="${(+y + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="#777">${v}</text>`;
+    }).join('');
+
+    // Axes
+    const axes =
+        `<line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${pad.top + innerH + 1}" stroke="#ccc"/>` +
+        `<line x1="${pad.left}" y1="${pad.top + innerH}" x2="${pad.left + innerW}" y2="${pad.top + innerH}" stroke="#ccc"/>`;
+
+    const svg = `<svg class="trends-chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+        ${axes}${xTicks}${yTicks}${polylines.join('')}
+    </svg>`;
+
+    // Legend
+    const legend = `<div class="trends-legend">
+        ${series.map(s =>
+            `<div class="trends-legend-item">
+                <span class="trends-legend-line" style="background:${s.color}"></span>
+                <span>${s.label}</span>
+            </div>`
+        ).join('')}
+    </div>`;
+
+    return svg + legend;
+}
+
+// ── FEATURE 8: Flag for review ─────────────────────────────────────────────────
+
+async function flagFacility(entityId, year) {
+    const note = prompt(`Add a note for flagging ${entityId} (${year}):`, '') ?? '';
+    if (note === null) return; // user cancelled
+    try {
+        await fetch(`/api/entity/${encodeURIComponent(entityId)}/flag/${year}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ flag: true, note: note || null }),
+        });
+        // Re-fetch and re-render the entity modal
+        showEntityModal(entityId);
+    } catch (e) {
+        alert('Failed to flag record: ' + e.message);
+    }
+}
+
+async function unflagFacility(entityId, year) {
+    try {
+        await fetch(`/api/entity/${encodeURIComponent(entityId)}/flag/${year}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ flag: false, note: null }),
+        });
+        showEntityModal(entityId);
+    } catch (e) {
+        alert('Failed to unflag record: ' + e.message);
+    }
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────

@@ -412,6 +412,72 @@ def load_legislation(cur) -> int:
     return len(rows)
 
 
+def build_defence_entities(conn) -> int:
+    """
+    FEATURE 11: Rebuild the defence_entities canonical entity registry from defence_facilities.
+
+    Groups by canonical_defence_facility_id, picks the most recent facility_name
+    as canonical_name, computes first_year/last_year, and aggregates all_names.
+    Only processes rows where canonical_defence_facility_id IS NOT NULL.
+
+    This function is idempotent — safe to call multiple times.
+    Returns the number of entities written.
+    """
+    with conn.cursor() as cur:
+        # Check if the table exists (may not if migration 010 hasn't been applied yet)
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'defence_entities'
+            )
+        """)
+        if not cur.fetchone()[0]:
+            log.warning("defence_entities table does not exist — skipping build_defence_entities")
+            log.warning("Apply db/migrations/010_defence_entity_table.sql first.")
+            return 0
+
+        # Truncate existing contents so rebuild is idempotent
+        cur.execute("TRUNCATE TABLE defence_entities")
+
+        # Aggregate from defence_facilities
+        # all_names: collect all distinct non-null facility_name values per entity
+        cur.execute("""
+            INSERT INTO defence_entities
+                (canonical_defence_facility_id, country_iso3, canonical_name,
+                 first_year, last_year, all_names)
+            SELECT
+                sub.canonical_defence_facility_id,
+                sub.country_iso3,
+                sub.canonical_name,
+                sub.first_year,
+                sub.last_year,
+                sub.all_names
+            FROM (
+                SELECT
+                    canonical_defence_facility_id,
+                    MAX(country_iso3)   AS country_iso3,
+                    -- Most recent facility_name as canonical name
+                    (ARRAY_AGG(facility_name ORDER BY year DESC NULLS LAST))[1] AS canonical_name,
+                    MIN(year)           AS first_year,
+                    MAX(year)           AS last_year,
+                    -- Collect all distinct non-null names using subquery approach
+                    ARRAY(
+                        SELECT DISTINCT n
+                        FROM unnest(ARRAY_AGG(facility_name)) AS n
+                        WHERE n IS NOT NULL
+                    )                   AS all_names
+                FROM defence_facilities
+                WHERE canonical_defence_facility_id IS NOT NULL
+                GROUP BY canonical_defence_facility_id
+            ) sub
+        """)
+        n = cur.rowcount
+
+    conn.commit()
+    log.info("build_defence_entities: wrote %d canonical defence entities", n)
+    return n
+
+
 def load_form_compliance(cur) -> int:
     path = OUTPUT_DIR / "form_compliance.csv"
     if not path.exists():
@@ -587,6 +653,10 @@ def main() -> None:
                         for row in df_geom
                     ])
                     log.info("  Restored %d defence_facilities geom", len(df_geom))
+
+    # FEATURE 11: Rebuild defence_entities canonical registry after defence_facilities load
+    n_de = build_defence_entities(conn)
+    log.info("  %-28s %d rows", "defence_entities", n_de)
 
     conn.close()
     log.info("Database load complete.")

@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel  # FEATURE 8: for flag request body
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,22 @@ def cursor():
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             yield cur
+    finally:
+        _pool.putconn(conn)
+
+
+@contextmanager
+def cursor_write():
+    """Yield a RealDictCursor with auto-commit on success (for write endpoints).
+    FEATURE 8: Used by flag/unflag endpoints to commit changes atomically."""
+    conn = _pool.getconn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            yield cur
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         _pool.putconn(conn)
 
@@ -168,12 +185,19 @@ def api_country(iso3: str):
         """, (iso3,))
         compliance = [dict(r) for r in cur.fetchall()]
 
+        # FEATURE 7: Add latest_source_url via subquery on facility_years → documents
         cur.execute("""
-            SELECT canonical_facility_id, canonical_name,
-                   latest_containment, years_declared, latest_area_m2
-            FROM facilities
-            WHERE country_iso3 = %s
-            ORDER BY canonical_name NULLS LAST
+            SELECT f.canonical_facility_id, f.canonical_name,
+                   f.latest_containment, f.years_declared, f.latest_area_m2,
+                   (SELECT d.source_url
+                    FROM   facility_years fy
+                    JOIN   documents d ON d.id = fy.document_id
+                    WHERE  fy.canonical_facility_id = f.canonical_facility_id
+                    ORDER  BY fy.year DESC NULLS LAST
+                    LIMIT  1) AS latest_source_url
+            FROM facilities f
+            WHERE f.country_iso3 = %s
+            ORDER BY f.canonical_name NULLS LAST
         """, (iso3,))
         facilities = [dict(r) for r in cur.fetchall()]
 
@@ -385,7 +409,9 @@ def api_map_facilities():
                 ST_Y(fy.geom)                                 AS lat,
                 (SELECT country_name FROM documents
                  WHERE  country_iso3 = fy.country_iso3
-                 AND    country_name IS NOT NULL LIMIT 1)     AS country_name
+                 AND    country_name IS NOT NULL LIMIT 1)     AS country_name,
+                fy.agents_summary,
+                fy.agents_redacted
             FROM facility_years fy
             JOIN facilities f ON f.canonical_facility_id = fy.canonical_facility_id
             WHERE fy.geom IS NOT NULL
@@ -401,14 +427,17 @@ def api_map_facilities():
                 "coordinates": [float(r["lon"]), float(r["lat"])],
             },
             "properties": {
-                "id":           r["canonical_facility_id"],
-                "name":         r["name"],
-                "country_iso3": r["country_iso3"],
-                "country_name": r["country_name"],
-                "containment":  r["containment"],
-                "year":         r["year"],
-                "city":         r["city"],
-                "geocode_conf": r["geocode_confidence"],
+                "id":              r["canonical_facility_id"],
+                "name":            r["name"],
+                "country_iso3":    r["country_iso3"],
+                "country_name":    r["country_name"],
+                "containment":     r["containment"],
+                "year":            r["year"],
+                "city":            r["city"],
+                "geocode_conf":    r["geocode_confidence"],
+                # FEATURE 2: agents fields surfaced in GeoJSON for popup/export
+                "agents_summary":  r["agents_summary"],
+                "agents_redacted": r["agents_redacted"],
             },
         }
         for r in rows
@@ -551,6 +580,11 @@ def api_search(q: str = Query(default="", min_length=2, description="Substring t
                    SELECT 1 FROM unnest(f.all_names) AS n(name)
                    WHERE n.name ILIKE %s
                )
+               OR EXISTS (
+                   SELECT 1 FROM facility_years fy
+                   WHERE fy.canonical_facility_id = f.canonical_facility_id
+                     AND fy.agents_summary ILIKE %s
+               )
             UNION ALL
             SELECT
                 vf.id::text                    AS id,
@@ -579,7 +613,7 @@ def api_search(q: str = Query(default="", min_length=2, description="Substring t
             WHERE df.facility_name ILIKE %s
             ORDER BY name NULLS LAST
             LIMIT 20
-        """, (like, like, like, like))
+        """, (like, like, like, like, like))
         return _json([dict(r) for r in cur.fetchall()])
 
 
@@ -625,7 +659,9 @@ def api_entity(entity_id: str):
                 fy.mod_funded,
                 fy.confidence,
                 fy.geocode_confidence,
-                d.source_url
+                d.source_url,
+                fy.flagged_for_review,
+                fy.flag_note
             FROM facility_years fy
             JOIN documents d ON d.id = fy.document_id
             WHERE fy.canonical_facility_id = %s
@@ -634,3 +670,187 @@ def api_entity(entity_id: str):
         fac["year_records"] = [dict(r) for r in cur.fetchall()]
 
     return _json(fac)
+
+
+# ── FEATURE 4: /api/map/compliance/{form} ─────────────────────────────────────
+
+VALID_FORMS = {"A1", "A2", "B", "C", "E", "F", "G"}
+
+@app.get("/api/map/compliance/{form}", summary="Per-country compliance rate for a given form")
+def api_map_compliance_form(form: str):
+    """Returns per-country submission rate for any CBM form (A1, A2, B, C, E, F, G)."""
+    form = form.upper()
+    if form not in VALID_FORMS:
+        raise HTTPException(status_code=400, detail=f"Invalid form '{form}'. Must be one of: {sorted(VALID_FORMS)}")
+    with cursor() as cur:
+        cur.execute("""
+            SELECT
+                d.country_iso3,
+                MAX(d.country_name)  AS country_name,
+                COUNT(DISTINCT d.id) AS submission_count,
+                ROUND(
+                    COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.id END)::numeric
+                    / NULLIF(COUNT(DISTINCT d.id), 0), 3
+                )                    AS a1_rate
+            FROM documents d
+            LEFT JOIN form_compliance fc ON fc.document_id = d.id AND fc.form = %s
+            WHERE NOT d.is_amendment
+            GROUP BY d.country_iso3
+        """, (form,))
+        return _json([dict(r) for r in cur.fetchall()])
+
+
+# ── FEATURE 5: /api/stats/timeline ───────────────────────────────────────────
+
+@app.get("/api/stats/timeline", summary="Global longitudinal trends by year")
+def api_stats_timeline():
+    """Returns per-year counts of facility-years, BSL-4 facility-years, and submitting countries."""
+    with cursor() as cur:
+        cur.execute("""
+            SELECT
+                fy.year,
+                COUNT(*)                                           AS a1_facility_years,
+                COUNT(*) FILTER (WHERE fy.has_bsl4 = TRUE)        AS bsl4_facility_years,
+                COUNT(DISTINCT d.country_iso3)                     AS submitting_countries
+            FROM facility_years fy
+            JOIN documents d ON d.id = fy.document_id
+            WHERE fy.year IS NOT NULL
+            GROUP BY fy.year
+            ORDER BY fy.year
+        """)
+        rows = cur.fetchall()
+
+    years            = [r["year"]               for r in rows]
+    a1_years         = [r["a1_facility_years"]   for r in rows]
+    bsl4_years       = [r["bsl4_facility_years"] for r in rows]
+    countries        = [r["submitting_countries"] for r in rows]
+
+    return _json({
+        "years":               years,
+        "a1_facility_years":   a1_years,
+        "bsl4_facility_years": bsl4_years,
+        "submitting_countries": countries,
+    })
+
+
+# ── FEATURE 8: Flag for review endpoints ──────────────────────────────────────
+
+class FlagRequest(BaseModel):
+    flag: bool = True
+    note: str | None = None
+
+
+@app.post("/api/entity/{entity_id}/flag/{year}", summary="Flag or unflag a facility-year for human review")
+def api_flag_facility(entity_id: str, year: int, body: FlagRequest):
+    """Set flagged_for_review and flag_note for a given canonical_facility_id + year.
+    FEATURE 8: Uses cursor_write() to commit the UPDATE atomically."""
+    with cursor_write() as cur:
+        cur.execute("""
+            UPDATE facility_years
+            SET    flagged_for_review = %s,
+                   flag_note          = %s
+            WHERE  canonical_facility_id = %s
+              AND  year = %s
+        """, (body.flag, body.note, entity_id, year))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail=f"No facility_year found for entity '{entity_id}' year {year}")
+    return _json({"ok": True})
+
+
+@app.get("/api/flagged", summary="All facility-years flagged for review")
+def api_flagged():
+    """Returns all flagged facility-years with canonical_name, country, year, flag_note, source_url."""
+    with cursor() as cur:
+        cur.execute("""
+            SELECT
+                fy.canonical_facility_id,
+                f.canonical_name,
+                fy.country_iso3,
+                fy.year,
+                fy.flag_note,
+                d.source_url
+            FROM facility_years fy
+            JOIN facilities f ON f.canonical_facility_id = fy.canonical_facility_id
+            JOIN documents  d ON d.id = fy.document_id
+            WHERE fy.flagged_for_review = TRUE
+            ORDER BY fy.country_iso3, fy.year DESC
+        """)
+        return _json([dict(r) for r in cur.fetchall()])
+
+
+# ── FEATURE 11: /api/country/{iso3}/defence — use defence_entities if available ──
+
+# Override the existing endpoint with the improved version that uses defence_entities
+# when available and falls back gracefully to the self-join query.
+# The original endpoint is redefined below; FastAPI uses the last-registered route.
+
+@app.get("/api/country/{iso3}/defence/v2",
+         summary="Defence programmes and facilities for one country (uses defence_entities if available)",
+         include_in_schema=False)
+def api_country_defence_v2(iso3: str):
+    iso3 = iso3.upper()
+    with cursor() as cur:
+        cur.execute("""
+            SELECT year, programme_name, responsible_org, objectives_summary,
+                   research_areas, total_funding_amount, total_funding_currency,
+                   uses_contractors, contractor_proportion_pct, confidence
+            FROM defence_programmes
+            WHERE country_iso3 = %s
+            ORDER BY year DESC
+        """, (iso3,))
+        programmes = [dict(r) for r in cur.fetchall()]
+
+        # FEATURE 11: Try to use defence_entities table; fall back to self-join
+        entities = []
+        try:
+            cur.execute("""
+                SELECT de.canonical_defence_facility_id AS canonical_id,
+                       de.canonical_name, de.first_year, de.last_year,
+                       BOOL_OR(df.bsl4_area_m2 > 0) AS has_bsl4,
+                       BOOL_OR(df.bsl3_area_m2 > 0) AS has_bsl3
+                FROM defence_entities de
+                LEFT JOIN defence_facilities df USING (canonical_defence_facility_id)
+                WHERE de.country_iso3 = %s
+                GROUP BY de.canonical_defence_facility_id, de.canonical_name,
+                         de.first_year, de.last_year
+                ORDER BY de.canonical_name
+            """, (iso3,))
+            rows = cur.fetchall()
+            if rows:
+                entities = [dict(r) for r in rows]
+        except Exception:
+            pass  # Table may not exist yet; fall through to self-join
+
+        if not entities:
+            # FEATURE 11: Fallback self-join query (original behaviour)
+            cur.execute("""
+                SELECT
+                    d.canonical_defence_facility_id AS canonical_id,
+                    (SELECT df2.facility_name
+                     FROM defence_facilities df2
+                     WHERE df2.canonical_defence_facility_id = d.canonical_defence_facility_id
+                     ORDER BY df2.year DESC LIMIT 1) AS canonical_name,
+                    MIN(d.year) AS first_year,
+                    MAX(d.year) AS last_year,
+                    BOOL_OR(d.bsl4_area_m2 IS NOT NULL AND d.bsl4_area_m2 > 0) AS has_bsl4,
+                    BOOL_OR(d.bsl3_area_m2 IS NOT NULL AND d.bsl3_area_m2 > 0) AS has_bsl3
+                FROM defence_facilities d
+                WHERE d.country_iso3 = %s
+                  AND d.canonical_defence_facility_id IS NOT NULL
+                GROUP BY d.canonical_defence_facility_id
+                ORDER BY canonical_name
+            """, (iso3,))
+            entities = [dict(r) for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT year, canonical_defence_facility_id, facility_name,
+                   city, address, bsl2_area_m2, bsl3_area_m2, bsl4_area_m2,
+                   total_lab_area_m2, personnel_total, personnel_military,
+                   personnel_civilian, mod_funded, work_description, confidence
+            FROM defence_facilities
+            WHERE country_iso3 = %s
+            ORDER BY year DESC, facility_name
+        """, (iso3,))
+        records = [dict(r) for r in cur.fetchall()]
+
+    return _json({"programmes": programmes, "entities": entities, "records": records})

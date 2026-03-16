@@ -543,3 +543,19 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 #filter-panel::-webkit-scrollbar { width: 4px; }
 #filter-panel::-webkit-scrollbar-track { background: transparent; }
 #filter-panel::-webkit-scrollbar-thumb { background: #c8cce0; border-radius: 2px; }
+
+/* ── FEATURE 4: Choropleth form selector ────────────────────────────────── */
+.fp-form-select { width: 100%; padding: 3px 6px; background: #f0f2fa; border: 1px solid #c8d0e8; border-radius: 4px; font-size: 11px; color: #2a3060; cursor: pointer; }
+.fp-form-select:focus { outline: none; border-color: #4a8ad4; }
+
+/* ── FEATURE 5: Trends chart ────────────────────────────────────────────── */
+.trends-chart { font-size: 11px; }
+.trends-chart text { fill: #444; }
+.trends-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; }
+.trends-legend-item { display: flex; align-items: center; gap: 4px; }
+.trends-legend-line { display: inline-block; width: 24px; height: 3px; border-radius: 2px; }
+
+/* ── FEATURE 8: Flag for review ─────────────────────────────────────────── */
+.flag-btn { background: none; border: 1px solid #c0392b; color: #c0392b; border-radius: 3px; font-size: 10px; padding: 1px 6px; cursor: pointer; transition: background 0.15s; }
+.flag-btn:hover { background: #fde8e8; }
+.flag-badge { display: inline-block; background: #5a1010; color: #e08080; border-radius: 3px; font-size: 10px; padding: 1px 6px; margin-left: 6px; }

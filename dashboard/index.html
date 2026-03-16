@@ -169,10 +169,24 @@
                     <label class="fp-check"><input type="checkbox" id="hide-low" onchange="onFilterChange()"> Hide low-confidence geocodes</label>
                 </div>
 
+                <!-- FEATURE 4: Choropleth form selector -->
+                <div class="fp-section">
+                    <div class="fp-label">CHOROPLETH <span class="fp-sublabel">(submission rate by form)</span></div>
+                    <select id="choro-form-select" class="fp-form-select" onchange="onChoroFormChange()">
+                        <option value="A1">A1 — Research facilities</option>
+                        <option value="A2">A2 — Defence programmes</option>
+                        <option value="G">G — Vaccine facilities</option>
+                        <option value="E">E — Legislation</option>
+                        <option value="F">F — Past programmes</option>
+                    </select>
+                </div>
+
                 <div class="fp-section fp-actions">
                     <button class="fp-btn" onclick="exportCSV()">⬇ Export CSV</button>
                     <button class="fp-btn" id="fp-copy" onclick="copyPermalink()">🔗 Copy link</button>
                     <button class="fp-btn" onclick="showGlobalTable()">⊞ All countries</button>
+                    <!-- FEATURE 5: Trends button -->
+                    <button class="fp-btn" onclick="showTrends()">📈 Trends</button>
                     <button class="fp-btn" data-bs-toggle="modal" data-bs-target="#about-modal">ℹ About</button>
                 </div>
 
@@ -206,10 +220,13 @@
             </div>
             <div class="modal-body">
 
+                <!-- FEATURE 10: counts populated dynamically by renderStats() in app.js -->
                 <p>This tool visualises structured data extracted from <strong>Biological Weapons Convention (BWC)
-                Confidence-Building Measure (CBM)</strong> submissions — <strong>510 publicly available submissions
-                from 51 states parties</strong>, downloaded from the UN BWC portal
-                (<a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>), spanning 1988–2026.</p>
+                Confidence-Building Measure (CBM)</strong> submissions, downloaded from the UN BWC portal
+                (<a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>), spanning 1988–2026.
+                The database contains structured data from <strong><span id="about-sub-count">…</span> documents</strong>
+                representing <strong><span id="about-country-count">…</span> countries</strong> that have declared
+                biological research facilities.</p>
 
                 <h6 class="about-heading">Layers</h6>
                 <p>Three types of declared facility are shown as map markers:</p>
@@ -269,6 +286,21 @@
                 <p class="text-muted small">Data extracted and processed as part of academic research on BWC transparency.
                 Not an official UN or ISU product. All source documents are publicly available
                 at <a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── FEATURE 5: Global trends modal ──────────────────────────────────── -->
+<div class="modal fade" id="trends-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Global Trends</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="trends-body">
+                <div class="text-center py-4 text-muted">Loading…</div>
             </div>
         </div>
     </div>

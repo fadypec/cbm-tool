@@ -98,6 +98,10 @@ PROGRESS_INTERVAL = 10             # emit a log.info progress line every N docum
 # law listings to infer which option applies. Max doc is ~29KB, cost is trivial.
 FORM_E_MAX_CHARS = None            # no truncation
 
+# FEATURE 9: Form B — disease outbreak declarations
+# Single API call per doc, no chunking (entries are typically short free-text).
+FORM_B_MAX_CHARS = None            # no truncation
+
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
@@ -335,6 +339,21 @@ skip generic constitutional provisions unless they are the sole measure
 set translated=true\
 """
 
+
+SYSTEM_PROMPT_B = """\
+Extract disease outbreak reports from this BWC CBM Form B. Return JSON array of objects with: \
+pathogen (string), location (string), date_range (string), cases_estimate (string), \
+deaths_estimate (string), suspected_source (string), notes (string)
+If no outbreaks are declared or section says nothing to declare, return [].
+
+Return ONLY valid JSON, no preamble. Example:
+[{"pathogen": "...", "location": "...", "date_range": "...", "cases_estimate": "...",
+  "deaths_estimate": "...", "suspected_source": "...", "notes": "..."}]
+\
+"""
+
+
+# FEATURE 9: End of SYSTEM_PROMPT_B
 
 SYSTEM_PROMPT_A2 = """\
 You are extracting structured data from a BWC Confidence-Building Measure \
@@ -1286,6 +1305,174 @@ def _write_output_e(
     )
 
 
+# ── Form B extraction ────────────────────────────────────────────────────────
+
+
+def extract_form_b(text: str, entry_id: str, client: anthropic.Anthropic) -> list[dict]:
+    """
+    FEATURE 9: Extract outbreak data from Form B text.
+    Single API call (no chunking). Returns a list of outbreak dicts.
+    Follows the same pattern as extract_form_f / process_entry_e.
+    """
+    messages = [{"role": "user", "content": text}]
+    last_t: list[float] = [0.0]
+    try:
+        resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_B)
+    except Exception as exc:
+        log.error("[%s/B] API error: %s", entry_id, exc)
+        return []
+
+    raw = resp.content[0].text.strip()
+    # SYSTEM_PROMPT_B returns a JSON array, not an object
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+    except json.JSONDecodeError:
+        pass
+
+    # Try markdown fence
+    m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw, re.S)
+    if m:
+        try:
+            data = json.loads(m.group(1))
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+    # Try bare array
+    m = re.search(r"\[.*\]", raw, re.S)
+    if m:
+        try:
+            data = json.loads(m.group())
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+    log.warning("[%s/B] Response not valid JSON array", entry_id)
+    return []
+
+
+def process_entry_b(
+    entry: dict,
+    client: anthropic.Anthropic,
+    last_t: list[float],
+) -> dict:
+    """
+    FEATURE 9: Extract outbreak declarations from Form B of one document.
+    Output goes to data/structured/{id}_form_b.json.
+    """
+    entry_id  = entry["id"]
+    form_path = SEGMENTED_DIR / entry_id / "form_b.txt"
+    out_path  = STRUCTURED_DIR / f"{entry_id}_form_b.json"
+
+    if not form_path.exists():
+        return {"id": entry_id, "status": "no_form_b"}
+
+    if out_path.exists():
+        return {"id": entry_id, "status": "skipped"}
+
+    text = form_path.read_text(encoding="utf-8").strip()
+    if not text:
+        _write_output_b(out_path, entry, [], {"input_tokens": 0, "output_tokens": 0})
+        return {"id": entry_id, "status": "ok", "outbreaks": 0, "calls": 0,
+                "input_tokens": 0, "output_tokens": 0}
+
+    if FORM_B_MAX_CHARS and len(text) > FORM_B_MAX_CHARS:
+        text = text[:FORM_B_MAX_CHARS]
+
+    user_content = (
+        f"State Party: {entry['country']} ({entry['country_iso3']})\n"
+        f"Year: {entry['year']}\n"
+        f"Document language: {entry.get('language', 'en')}\n\n"
+        f"{text}"
+    )
+    messages: list[dict] = [{"role": "user", "content": user_content}]
+
+    resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_B)
+    raw  = resp.content[0].text.strip()
+    usage = {
+        "input_tokens":  resp.usage.input_tokens,
+        "output_tokens": resp.usage.output_tokens,
+    }
+
+    # Parse JSON array response
+    outbreaks: list[dict] = []
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            outbreaks = data
+    except json.JSONDecodeError:
+        m = re.search(r"\[.*\]", raw, re.S)
+        if m:
+            try:
+                data = json.loads(m.group())
+                if isinstance(data, list):
+                    outbreaks = data
+            except json.JSONDecodeError:
+                pass
+
+    if not outbreaks and raw:
+        log.warning("[%s/B] Could not parse response as JSON array — retrying once", entry_id)
+        messages += [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content":
+             "Your response was not a valid JSON array. "
+             "Return ONLY a JSON array — no markdown fences, no explanation."},
+        ]
+        resp2 = api_call(client, messages, last_t, system=SYSTEM_PROMPT_B)
+        raw2  = resp2.content[0].text.strip()
+        usage["input_tokens"]  += resp2.usage.input_tokens
+        usage["output_tokens"] += resp2.usage.output_tokens
+        try:
+            data2 = json.loads(raw2)
+            if isinstance(data2, list):
+                outbreaks = data2
+        except json.JSONDecodeError:
+            log.error("[%s/B] Retry also returned invalid JSON", entry_id)
+
+    _write_output_b(out_path, entry, outbreaks, usage)
+
+    log.info(
+        "[%s/B] %d outbreaks | in=%d out=%d tokens",
+        entry_id, len(outbreaks),
+        usage["input_tokens"], usage["output_tokens"],
+    )
+    return {
+        "id":           entry_id,
+        "status":       "ok",
+        "outbreaks":    len(outbreaks),
+        "calls":        1,
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+    }
+
+
+def _write_output_b(
+    out_path: Path,
+    entry: dict,
+    outbreaks: list[dict],
+    usage: dict,
+) -> None:
+    STRUCTURED_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "id":              entry["id"],
+        "country":         entry["country"],
+        "country_iso3":    entry["country_iso3"],
+        "year":            entry["year"],
+        "total_api_calls": 1,
+        "total_tokens":    usage,
+        "outbreak_count":  len(outbreaks),
+        "outbreaks":       outbreaks,
+    }
+    out_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -1314,12 +1501,15 @@ def main() -> None:
                         help="Extract Form F (past offensive/defensive programmes).")
     parser.add_argument("--form-e", action="store_true",
                         help="Extract Form E (national biosafety/biosecurity legislation).")
+    # FEATURE 9: Form B — disease outbreak declarations
+    parser.add_argument("--form-b", action="store_true",
+                        help="Extract Form B (disease outbreak declarations).")
     parser.add_argument("--no-e-truncate", action="store_true",
                         help="Disable Form E truncation (send full text; for sense-checking).")
     args = parser.parse_args()
 
-    if sum([args.form_g, args.form_a2, args.form_f, args.form_e]) > 1:
-        log.error("--form-g, --form-a2, --form-f, and --form-e are mutually exclusive")
+    if sum([args.form_g, args.form_a2, args.form_f, args.form_e, args.form_b]) > 1:
+        log.error("--form-g, --form-a2, --form-f, --form-e, and --form-b are mutually exclusive")
         raise SystemExit(1)
 
     if not CATALOGUE_PATH.exists():
@@ -1340,6 +1530,10 @@ def main() -> None:
     elif args.form_e:
         form_file = "form_e.txt"
         suffix    = "_form_e.json"
+    elif args.form_b:
+        # FEATURE 9: Form B — disease outbreak declarations
+        form_file = "form_b.txt"
+        suffix    = "_form_b.json"
     else:
         form_file = "form_a1.txt"
         suffix    = "_form_a1.json"
@@ -1388,6 +1582,9 @@ def main() -> None:
         desc = "Extracting Form F"
     elif args.form_e:
         desc = "Extracting Form E"
+    elif args.form_b:
+        # FEATURE 9
+        desc = "Extracting Form B"
     else:
         desc = "Extracting Form A Part 1"
 
@@ -1405,6 +1602,10 @@ def main() -> None:
             max_chars = None if args.no_e_truncate else FORM_E_MAX_CHARS
             result = process_entry_e(entry, client, last_t, max_chars=max_chars)
             item_key = None
+        elif args.form_b:
+            # FEATURE 9: Form B dispatch
+            result = process_entry_b(entry, client, last_t)
+            item_key = "outbreaks"
         else:
             result = process_entry(entry, client, last_t)
             item_key = "facilities"
