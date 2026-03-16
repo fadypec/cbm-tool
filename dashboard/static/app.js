@@ -194,14 +194,12 @@ function normalizeBsl(containment) {
 
 function markerOptions(layer, feature) {
     const p = feature.properties;
-    if (layer === 'A1') {
-        return { radius: 6, fillColor: bslColor(p.containment), color: '#fff', weight: 1.5, opacity: 1, fillOpacity: 0.85 };
-    }
-    if (layer === 'A2') {
-        return { radius: 5, fillColor: '#8b1a1a', color: '#fff', weight: 1.5, opacity: 1, fillOpacity: 0.85 };
-    }
-    // G — vaccine
-    return { radius: 5, fillColor: '#0a7a6a', color: '#fff', weight: 1.5, opacity: 1, fillOpacity: 0.85 };
+    // bubblingMouseEvents: false ensures a marker click never falls through to the
+    // choropleth country layer underneath, preventing accidental country navigation.
+    const base = { color: '#fff', weight: 1.5, opacity: 1, fillOpacity: 0.85, bubblingMouseEvents: false };
+    if (layer === 'A1') return { ...base, radius: 8, fillColor: bslColor(p.containment) };
+    if (layer === 'A2') return { ...base, radius: 7, fillColor: '#8b1a1a' };
+    return                       { ...base, radius: 7, fillColor: '#0a7a6a' };
 }
 
 // ── Filter logic ───────────────────────────────────────────────────────────
