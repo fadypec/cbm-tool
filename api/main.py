@@ -120,14 +120,30 @@ def _json(data) -> JSONResponse:
 
 # ── App ──────────────────────────────────────────────────────────────────────
 
+# ── Rate limiter ─────────────────────────────────────────────────────────────
+#
+# Railway (and most reverse proxies) terminate TLS and forward traffic, so
+# request.client.host is always Railway's internal IP rather than the real
+# visitor's IP.  Railway sets the standard X-Forwarded-For header with the
+# actual client IP as the first entry.
+#
+# get_client_ip() reads X-Forwarded-For when present, falling back to the
+# direct socket address for local development where no proxy is involved.
+
+def get_client_ip(request: Request) -> str:
+    """Return the real client IP, honouring Railway's X-Forwarded-For header."""
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        # X-Forwarded-For may be a comma-separated list; the leftmost entry is
+        # the original client (Railway appends its own IP on the right).
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "127.0.0.1"
+
+
 # Global default: 60 requests/minute per IP for all endpoints.
 # Heavy GeoJSON map dumps are overridden to 20/minute at the route level.
 # The AI natural-query endpoint is overridden to 10/minute.
-# NOTE: If deployed behind a reverse proxy (nginx, etc.) all requests arrive
-# from 127.0.0.1.  In that case, configure the proxy to set X-Real-IP and use
-# a key_func that reads it, or raise the global limit and rely on the proxy's
-# own rate limiting instead.
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+limiter = Limiter(key_func=get_client_ip, default_limits=["60/minute"])
 
 app = FastAPI(
     title="CBM Facility Explorer",
