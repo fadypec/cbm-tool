@@ -62,6 +62,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     initClusters();
     entityModal = new bootstrap.Modal(document.getElementById('entity-modal'));
     initSearch();
+    initStaticListeners();
+    initEventDelegation();
     restoreFromHash();
 
     try {
@@ -403,7 +405,7 @@ function buildPopup(layer, feature) {
         : `<span style="display:inline-block;padding:1px 7px;border-radius:4px;background:${color};color:#fff;font-size:11px">${layerLabel} facility</span>`;
 
     const historyLink = layer === 'A1'
-        ? `<br><a class="popup-link" href="#" onclick="showEntityModal('${esc(p.id)}');return false;">Full history →</a>`
+        ? `<br><a class="popup-link" href="#" data-action="show-entity" data-entity-id="${esc(p.id)}">Full history →</a>`
         : '';
 
     // FEATURE 2: agents preview line in popup (A1 only)
@@ -519,7 +521,7 @@ function updateActiveFilterChips() {
         const n = STATE.aiFilterIds.size;
         el.innerHTML =
             `<span class="filter-chip">🤖 AI filter: ${n} facilit${n !== 1 ? 'ies' : 'y'} ` +
-            `<button class="filter-chip-clear" onclick="clearAIFilter()" title="Clear AI filter">×</button></span>`;
+            `<button class="filter-chip-clear" data-action="clear-ai-filter" title="Clear AI filter">×</button></span>`;
         el.style.display = 'block';
     } else {
         el.innerHTML = '';
@@ -949,7 +951,7 @@ function addLegend() {
             div.innerHTML =
                 `<div class="leg-header">
                     <span class="leg-header-title">Legend</span>
-                    <button class="leg-toggle" onclick="toggleLegend(this)" title="Hide legend">▼</button>
+                    <button class="leg-toggle" data-action="toggle-legend" title="Hide legend">▼</button>
                 </div>` +
                 `<div class="leg-body">` +
                 `<div class="leg-title">RESEARCH (BSL LEVEL)</div>` +
@@ -998,7 +1000,7 @@ function renderCountryList(countries) {
         const tBadge = ts != null ? transparencyBadge(ts) : '';
         return `
         <div class="country-item" data-iso3="${c.country_iso3}"
-             onclick="selectCountry('${esc(c.country_iso3)}')">
+             data-action="select-country">
             <div class="country-name">${esc(c.country_name || c.country_iso3)}${tBadge}</div>
             <div class="country-meta">
                 ${c.submission_count} submission${c.submission_count !== 1 ? 's' : ''}
@@ -1066,7 +1068,7 @@ function renderCountryDetail(data) {
     if (sub && cr) {
         const rate  = cr.a1_rate != null ? ` · A1 ${Math.round(cr.a1_rate * 100)}%` : '';
         const tBadge = ts != null ? ` · <span style="font-size:10px">${transparencyBadge(ts)}</span>` : '';
-        const exportBtn = `<button onclick="exportCountryReport('${esc(data.country_iso3 || _currentIso3)}')"
+        const exportBtn = `<button data-action="export-country-report" data-iso3="${esc(data.country_iso3 || _currentIso3)}"
             style="background:none;border:none;color:#4a5280;font-size:10px;cursor:pointer;padding:0 0 0 6px"
             title="Export report card">↗ report</button>`;
         sub.innerHTML = `${cr.submission_count} sub${cr.submission_count !== 1 ? 's' : ''}${rate}${tBadge}${exportBtn}`;
@@ -1170,7 +1172,7 @@ function renderFacilityList(facilities) {
             ? `<div class="fac-meta" style="color:#5a6a50">${esc(f.agents_summary.slice(0, 60))}${f.agents_summary.length > 60 ? '…' : ''}</div>`
             : '';
         return `
-            <div class="fac-item" onclick="showEntityModal('${esc(f.canonical_facility_id)}')">
+            <div class="fac-item" data-action="show-entity" data-entity-id="${esc(f.canonical_facility_id)}"
                 <div class="fac-name">${esc(f.canonical_name || '[Unnamed facility]')}</div>
                 <div class="fac-meta">
                     ${f.latest_containment
@@ -1245,7 +1247,7 @@ function renderDefenceFacilityList(entities) {
                 : `${e.first_year}–${e.last_year}`;
             const bsl = e.has_bsl4 ? `<span style="color:${bslColor('BSL-4')}">BSL-4</span>`
                        : e.has_bsl3 ? `<span style="color:${bslColor('BSL-3')}">BSL-3</span>` : '';
-            return `<div class="fac-item" onclick="showDefenceEntityModal('${esc(e.canonical_id)}')">
+            return `<div class="fac-item" data-action="show-defence-entity" data-entity-id="${esc(e.canonical_id)}"
                 <div class="fac-name">${esc(e.canonical_name || '[Unnamed facility]')}</div>
                 <div class="fac-meta">${bsl ? bsl + ' &nbsp;·&nbsp; ' : ''}${yrs}</div>
             </div>`;
@@ -1467,8 +1469,8 @@ function renderEntityModal(data) {
         ].filter(([, v]) => v);
         const flagUI = rec.flagged_for_review
             ? `<span class="flag-badge">🚩 Flagged${rec.flag_note ? ': ' + esc(rec.flag_note) : ''}</span>
-               <button class="flag-btn ms-2" onclick="unflagFacility('${esc(data.canonical_facility_id)}',${rec.year})">Unflag</button>`
-            : `<button class="flag-btn" onclick="flagFacility('${esc(data.canonical_facility_id)}',${rec.year})">Flag for review</button>`;
+               <button class="flag-btn ms-2" data-action="unflag-facility" data-entity-id="${esc(data.canonical_facility_id)}" data-year="${rec.year}">Unflag</button>`
+            : `<button class="flag-btn" data-action="flag-facility" data-entity-id="${esc(data.canonical_facility_id)}" data-year="${rec.year}">Flag for review</button>`;
         return `
             <div class="year-record">
                 <div class="yr-head">${rec.year}
@@ -1489,9 +1491,9 @@ function renderEntityModal(data) {
     const showChangeTab = yr.length >= 2;
 
     const tabBar = `<div class="em-tab-bar">
-        <button class="em-tab active" data-tab="records"  onclick="switchEntityTab(this,'records')">Year records (${yr.length})</button>
-        ${showChangeTab ? `<button class="em-tab" data-tab="changes"  onclick="switchEntityTab(this,'changes')">Changes</button>` : ''}
-        ${showChangeTab ? `<button class="em-tab" data-tab="timeline" onclick="switchEntityTab(this,'timeline')">Timeline</button>` : ''}
+        <button class="em-tab active" data-tab="records"  data-action="switch-entity-tab">Year records (${yr.length})</button>
+        ${showChangeTab ? `<button class="em-tab" data-tab="changes"  data-action="switch-entity-tab">Changes</button>` : ''}
+        ${showChangeTab ? `<button class="em-tab" data-tab="timeline" data-action="switch-entity-tab">Timeline</button>` : ''}
     </div>`;
 
     const html = header + tabBar +
@@ -1615,9 +1617,9 @@ async function doSearch(q) {
                 const layerColor = _LAYER_COLOR[f.layer] || '#4a8ad4';
                 const layerLabel = _LAYER_LABEL[f.layer] || f.layer;
                 const isActivity = f.match_type === 'activity';
-                const onclick = f.id
-                    ? `selectSearchResult('${esc(f.id)}','${esc(f.country_iso3)}','${esc(f.layer)}')`
-                    : `selectCountry('${esc(f.country_iso3)}')`;
+                const actionAttrs = f.id
+                    ? `data-action="select-search-result" data-entity-id="${esc(f.id)}" data-iso3="${esc(f.country_iso3)}" data-layer="${esc(f.layer)}"`
+                    : `data-action="select-country" data-iso3="${esc(f.country_iso3)}"`;
 
                 // For activity matches show a short snippet of the matched text
                 let snippetHtml = '';
@@ -1632,7 +1634,7 @@ async function doSearch(q) {
                     ? `<span class="sr-tag sr-tag-activity">activity</span>`
                     : `<span class="sr-tag" style="color:${layerColor}">${layerLabel}</span>`;
 
-                return `<li data-idx="${i}" onclick="${onclick}">
+                return `<li data-idx="${i}" ${actionAttrs}>
                     <div>${highlightTerm(f.name || '[Unnamed]', q)} ${tagHtml}</div>
                     <div class="sr-meta">${esc(f.country_name || f.country_iso3)}</div>
                     ${snippetHtml}
@@ -1713,7 +1715,7 @@ function renderGlobalTable(rows, sortCol, sortDir) {
 
     const arrow = col => col !== sortCol ? '' : (sortDir === 'asc' ? ' ▲' : ' ▼');
     const th = (col, label) =>
-        `<th class="gt-th-sort${col === sortCol ? ' gt-sorted' : ''}" onclick="sortGlobalTable('${col}')">${label}${arrow(col)}</th>`;
+        `<th class="gt-th-sort${col === sortCol ? ' gt-sorted' : ''}" data-action="sort-global-table" data-col="${col}">${label}${arrow(col)}</th>`;
 
     let html = `<table class="gt-table">
         <thead><tr>
@@ -1732,7 +1734,7 @@ function renderGlobalTable(rows, sortCol, sortDir) {
         const bsl4 = c.bsl4_count
             ? `<strong style="color:#c0392b">${c.bsl4_count}</strong>`
             : '<span style="color:#aaa">—</span>';
-        html += `<tr class="gt-row" onclick="selectCountry('${esc(c.country_iso3)}');bootstrap.Modal.getInstance(document.getElementById('global-table-modal')).hide()">
+        html += `<tr class="gt-row" data-action="select-country-close-modal" data-iso3="${esc(c.country_iso3)}" data-modal-id="global-table-modal">
             <td>${esc(c.country_name || c.country_iso3)}</td>
             <td>${c.submission_count || 0}</td>
             <td>${rate}</td>
@@ -1760,10 +1762,10 @@ async function showTrends() {
 
     document.getElementById('trends-body').innerHTML =
         `<div id="trends-tab-bar">
-            <button class="trends-tab active" data-tab="chart"    onclick="switchTrendsTab('chart')">📈 Trends</button>
-            <button class="trends-tab" data-tab="pathogens"        onclick="switchTrendsTab('pathogens')">🦠 Pathogens</button>
-            <button class="trends-tab" data-tab="changes"          onclick="switchTrendsTab('changes')">🔄 Changes</button>
-            <button class="trends-tab" data-tab="capacity"         onclick="switchTrendsTab('capacity')">🏗 BSL-4 Capacity</button>
+            <button class="trends-tab active" data-tab="chart"    data-action="switch-trends-tab">📈 Trends</button>
+            <button class="trends-tab" data-tab="pathogens"        data-action="switch-trends-tab">🦠 Pathogens</button>
+            <button class="trends-tab" data-tab="changes"          data-action="switch-trends-tab">🔄 Changes</button>
+            <button class="trends-tab" data-tab="capacity"         data-action="switch-trends-tab">🏗 BSL-4 Capacity</button>
          </div>
          <div id="trends-chart-panel"><div class="text-center py-4 text-muted">Loading…</div></div>
          <div id="trends-pathogen-panel"  style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>
@@ -1827,7 +1829,7 @@ function renderPathogenChart(data, container) {
         `<p class="pathogen-chart-header">Number of unique declared research facilities mentioning each organism. Click any row to filter the map.</p>` +
         data.map(d => {
             const pct = (d.count / maxCount * 100).toFixed(1);
-            return `<div class="pathogen-row" onclick="applyOrganismFilter('${esc(d.term)}')">
+            return `<div class="pathogen-row" data-action="apply-organism-filter" data-term="${esc(d.term)}"
                 <span class="pathogen-label">${esc(d.label)}</span>
                 <div class="pathogen-bar-wrap"><div class="pathogen-bar" style="width:${pct}%"></div></div>
                 <span class="pathogen-count">${d.count}</span>
@@ -2091,8 +2093,7 @@ async function loadReviewQueue() {
             <tr class="rq-row">
                 <td>
                     <a class="rq-entity-link" href="#"
-                       onclick="bootstrap.Modal.getInstance(document.getElementById('review-modal'))?.hide();
-                                showEntityModal('${esc(r.canonical_facility_id)}'); return false;"
+                       data-action="review-show-entity" data-entity-id="${esc(r.canonical_facility_id)}"
                     >${esc(r.canonical_name)}</a>
                 </td>
                 <td>${esc(r.country_iso3)}</td>
@@ -2105,7 +2106,7 @@ async function loadReviewQueue() {
                 </td>
                 <td>
                     <button class="flag-btn rq-unflag-btn"
-                            onclick="rqUnflag('${esc(r.canonical_facility_id)}', ${r.year}, this)">
+                            data-action="rq-unflag" data-entity-id="${esc(r.canonical_facility_id)}" data-year="${r.year}">
                         Unflag
                     </button>
                 </td>
@@ -2202,10 +2203,10 @@ function renderChangesPanel(data, container) {
             const sev = _CHG_SEVERITY[c.severity] || { cls: 'chg-med', label: '' };
             const icon = _CHG_ICONS[c.type] || '•';
             const yearRange = `${c.from_year}→${c.to_year}`;
-            const onclick = c.canonical_facility_id
-                ? `showEntityModal('${esc(c.canonical_facility_id)}')`
-                : `selectCountry('${esc(c.country_iso3)}')`;
-            return `<div class="chg-row ${sev.cls}" onclick="${onclick}">
+            const actionAttrs = c.canonical_facility_id
+                ? `data-action="show-entity" data-entity-id="${esc(c.canonical_facility_id)}"`
+                : `data-action="select-country" data-iso3="${esc(c.country_iso3)}"`;
+            return `<div class="chg-row ${sev.cls}" ${actionAttrs}
                 <div class="chg-left">
                     <span class="chg-type-icon">${icon}</span>
                     <div>
@@ -2358,8 +2359,8 @@ async function runAIQuery() {
             `<div class="ai-results-header">
                 <span>${facilities.length} matching facilit${facilities.length !== 1 ? 'ies' : 'y'}</span>
                 <div class="ai-results-actions">
-                    <button class="fp-btn" onclick="applyAIFilter(_aiResults)">Show on map</button>
-                    <button class="fp-btn" onclick="exportAIResults(_aiResults)">Export CSV</button>
+                    <button class="fp-btn" data-action="apply-ai-filter">Show on map</button>
+                    <button class="fp-btn" data-action="export-ai-results">Export CSV</button>
                 </div>
              </div>
              <div class="ai-results-list">` +
@@ -2420,20 +2421,20 @@ function updateActiveFiltersBar() {
 
     if (STATE.organism) {
         chips.push(`<span class="map-chip">🔬 ${esc(STATE.organism)}
-            <button class="map-chip-clear" onclick="clearOrganismFilter()" title="Clear">×</button></span>`);
+            <button class="map-chip-clear" data-action="clear-organism" title="Clear">×</button></span>`);
     }
     if (STATE.aiFilterIds) {
         const n = STATE.aiFilterIds.size;
         chips.push(`<span class="map-chip">🤖 AI: ${n} facilit${n !== 1 ? 'ies' : 'y'}
-            <button class="map-chip-clear" onclick="clearAIFilter()" title="Clear">×</button></span>`);
+            <button class="map-chip-clear" data-action="clear-ai-filter" title="Clear">×</button></span>`);
     }
     if (STATE.showLapsed) {
         chips.push(`<span class="map-chip">⏳ Lapsed ≥${STATE.lapsedThreshold}y
-            <button class="map-chip-clear" onclick="document.getElementById('lapsed-toggle').checked=false;onLapsedToggle()" title="Clear">×</button></span>`);
+            <button class="map-chip-clear" data-action="clear-lapsed-chip" title="Clear">×</button></span>`);
     }
     if (STATE.year !== null) {
         chips.push(`<span class="map-chip">📅 Year: ${STATE.year}
-            <button class="map-chip-clear" onclick="document.getElementById('all-years').checked=true;onAllYearsToggle()" title="Clear">×</button></span>`);
+            <button class="map-chip-clear" data-action="clear-year-chip" title="Clear">×</button></span>`);
     }
     const bslAll = Object.values(STATE.bsl).every(Boolean);
     if (!bslAll) {
@@ -2442,7 +2443,7 @@ function updateActiveFiltersBar() {
     }
     if (STATE.hideLow) {
         chips.push(`<span class="map-chip">📍 High/med geocode only
-            <button class="map-chip-clear" onclick="document.getElementById('hide-low').checked=false;onFilterChange()" title="Clear">×</button></span>`);
+            <button class="map-chip-clear" data-action="clear-hide-low-chip" title="Clear">×</button></span>`);
     }
 
     if (chips.length) {
@@ -2753,7 +2754,7 @@ function renderComparison(a, b) {
 
     return `<div class="cmp-grid">${col(a, tsA, subA)}${col(b, tsB, subB)}</div>
         <div style="text-align:right;margin-top:12px">
-            <button class="cmp-export-btn" onclick="exportComparison('${esc(a.country_iso3)}','${esc(b.country_iso3)}')">⬇ Export comparison CSV</button>
+            <button class="cmp-export-btn" data-action="export-comparison" data-iso3-a="${esc(a.country_iso3)}" data-iso3-b="${esc(b.country_iso3)}">⬇ Export comparison CSV</button>
         </div>`;
 }
 
@@ -2798,7 +2799,7 @@ async function exportCountryReport(iso3) {
 
     const html = `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>CBM Report: ${data.country_name}</title>
+<head><meta charset="UTF-8"><title>CBM Report: ${esc(data.country_name)}</title>
 <style>
   body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; color: #222; font-size: 13px; }
   h1 { font-size: 22px; border-bottom: 2px solid #ccc; padding-bottom: 8px; }
@@ -2812,8 +2813,8 @@ async function exportCountryReport(iso3) {
   .footer { margin-top: 30px; color: #888; font-size: 11px; border-top: 1px solid #eee; padding-top: 8px; }
 </style></head>
 <body>
-<h1>CBM Report Card: ${data.country_name}</h1>
-<p><strong>ISO3:</strong> ${iso3} &nbsp; <strong>Submissions:</strong> ${subYears.length}
+<h1>CBM Report Card: ${esc(data.country_name)}</h1>
+<p><strong>ISO3:</strong> ${esc(iso3)} &nbsp; <strong>Submissions:</strong> ${subYears.length}
 (${subYears[subYears.length-1] || '?'}–${subYears[0] || '?'})
 &nbsp; <strong>A1 substantive rate:</strong> ${cr.a1_rate != null ? Math.round(cr.a1_rate*100)+'%' : 'N/A'}
 ${ts != null ? `&nbsp; <strong>Transparency index:</strong> ${ts}/100` : ''}</p>
@@ -2825,18 +2826,18 @@ ${ts != null ? `&nbsp; <strong>Transparency index:</strong> ${ts}/100` : ''}</p>
 ${data.facilities.length ? `<table>
 <tr><th>Facility</th><th>Containment</th><th>Years</th></tr>
 ${data.facilities.map(f => `<tr>
-  <td>${f.canonical_name || '[Unnamed]'}</td>
+  <td>${esc(f.canonical_name) || '[Unnamed]'}</td>
   <td>${f.latest_containment
-      ? `<span class="badge ${f.latest_containment.includes('4') ? 'bsl4' : 'bsl3'}">${f.latest_containment}</span>`
-      : '—'}</td>
+      ? `<span class="badge ${(f.latest_containment || '').includes('4') ? 'bsl4' : 'bsl3'}">${esc(f.latest_containment)}</span>`
+      : '&mdash;'}</td>
   <td>${(f.years_declared || []).length}</td>
 </tr>`).join('')}
 </table>` : '<p><em>No A1 facilities declared.</em></p>'}
 
 ${bsl4facs.length ? `<h2>BSL-4 FACILITIES</h2>
-<ul>${bsl4facs.map(f => `<li><strong>${f.canonical_name || '[Unnamed]'}</strong></li>`).join('')}</ul>` : ''}
+<ul>${bsl4facs.map(f => `<li><strong>${esc(f.canonical_name) || '[Unnamed]'}</strong></li>`).join('')}</ul>` : ''}
 
-<div class="footer">Generated from CBM Facility Explorer · bwc-cbm.un.org · Data as of 2026-03-17</div>
+<div class="footer">Generated from CBM Facility Explorer &middot; bwc-cbm.un.org &middot; Data as of ${new Date().toISOString().slice(0, 10)}</div>
 </body></html>`;
 
     const blob = new Blob([html], {type: 'text/html'});
@@ -2934,7 +2935,6 @@ function renderTimelineTab(yearRecords) {
 
     const svg = `<svg class="timeline-svg" viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px"
             xmlns="http://www.w3.org/2000/svg"
-            onmouseleave="document.getElementById('tl-tooltip').style.display='none'"
             data-recs='${recMap.replace(/'/g, '&#39;')}'>
         ${baseline}${eventSvg}${dots}${yearLabels}
     </svg>`;
@@ -2950,12 +2950,13 @@ function renderTimelineTab(yearRecords) {
 }
 
 // Dot hover handler (called from SVG mouseover on circles)
-// Uses a delegated listener attached after insert, so we use an inline approach
+// Attaches hover listeners to timeline SVG dots and hides tooltip on mouse leave
 function initTimelineHover(container) {
     const svg = container.querySelector('svg.timeline-svg');
     if (!svg) return;
     const tip = document.getElementById('tl-tooltip');
     if (!tip) return;
+    svg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
     const recs = JSON.parse(svg.dataset.recs || '{}');
 
     svg.querySelectorAll('circle').forEach((dot, i) => {
@@ -2977,6 +2978,214 @@ function initTimelineHover(container) {
     });
 }
 
+// ── Static element listeners (replaces inline onchange/oninput/onkeydown) ──
+
+function initStaticListeners() {
+    // Layer checkboxes
+    ['A1', 'A2', 'G'].forEach(layer => {
+        const el = document.getElementById(`layer-${layer}`);
+        if (el) el.addEventListener('change', onFilterChange);
+    });
+    // BSL checkboxes
+    document.querySelectorAll('input[name="bsl"]').forEach(cb =>
+        cb.addEventListener('change', onFilterChange)
+    );
+    // Organism filter
+    const orgInput = document.getElementById('organism-input');
+    if (orgInput) orgInput.addEventListener('input', () => onOrganismFilter(orgInput.value));
+    // All-years checkbox
+    const allYears = document.getElementById('all-years');
+    if (allYears) allYears.addEventListener('change', onAllYearsToggle);
+    // Year input
+    const yearInput = document.getElementById('year-input');
+    if (yearInput) {
+        yearInput.addEventListener('input', () => onYearInput(yearInput.value));
+        yearInput.addEventListener('change', onFilterChange);
+    }
+    // Year slider
+    const yearSlider = document.getElementById('year-slider');
+    if (yearSlider) {
+        yearSlider.addEventListener('input', () => onYearSlider(yearSlider.value));
+        yearSlider.addEventListener('change', onFilterChange);
+    }
+    // Hide low-confidence geocodes
+    const hideLow = document.getElementById('hide-low');
+    if (hideLow) hideLow.addEventListener('change', onFilterChange);
+    // Lapsed toggle
+    const lapsedToggle = document.getElementById('lapsed-toggle');
+    if (lapsedToggle) lapsedToggle.addEventListener('change', onLapsedToggle);
+    // Lapsed threshold
+    const lapsedYears = document.getElementById('lapsed-years');
+    if (lapsedYears) lapsedYears.addEventListener('input', () => onLapsedThresholdChange(lapsedYears.value));
+    // Choropleth form selector
+    const choroSelect = document.getElementById('choro-form-select');
+    if (choroSelect) choroSelect.addEventListener('change', onChoroFormChange);
+    // AI query input
+    const aiInput = document.getElementById('ai-query-input');
+    if (aiInput) aiInput.addEventListener('keydown', e => { if (e.key === 'Enter') runAIQuery(); });
+    // Compare country selects
+    const cmpA = document.getElementById('cmp-country-a');
+    const cmpB = document.getElementById('cmp-country-b');
+    if (cmpA) cmpA.addEventListener('change', onCompareSelect);
+    if (cmpB) cmpB.addEventListener('change', onCompareSelect);
+}
+
+// ── Centralized event delegation (replaces inline onclick attributes) ────────
+
+function initEventDelegation() {
+    document.addEventListener('click', e => {
+        const el = e.target.closest('[data-action]');
+        if (!el) return;
+        e.preventDefault();
+        const action = el.dataset.action;
+        switch (action) {
+            // ── Navigation ──
+            case 'select-country':
+                selectCountry(el.dataset.iso3);
+                break;
+            case 'select-country-close-modal': {
+                const modalEl = document.getElementById(el.dataset.modalId || 'global-table-modal');
+                bootstrap.Modal.getInstance(modalEl)?.hide();
+                selectCountry(el.dataset.iso3);
+                break;
+            }
+            case 'show-entity':
+                showEntityModal(el.dataset.entityId);
+                break;
+            case 'show-defence-entity':
+                showDefenceEntityModal(el.dataset.entityId);
+                break;
+            case 'select-search-result':
+                selectSearchResult(el.dataset.entityId, el.dataset.iso3, el.dataset.layer);
+                break;
+
+            // ── Sidebar / panels ──
+            case 'toggle-sidebar':
+                toggleSidebar();
+                break;
+            case 'toggle-filter-panel':
+                toggleFilterPanel();
+                break;
+            case 'show-panel-list':
+                showPanel('list');
+                break;
+            case 'switch-tab':
+                switchDetailTab(el.dataset.tab);
+                break;
+            case 'switch-defence-subtab':
+                switchDefenceSubtab(el.dataset.subtab);
+                break;
+
+            // ── Search / AI ──
+            case 'toggle-search-mode':
+                toggleSearchMode();
+                break;
+            case 'clear-organism':
+                clearOrganismFilter();
+                break;
+            case 'run-ai-query':
+                runAIQuery();
+                break;
+            case 'apply-ai-filter':
+                applyAIFilter(_aiResults);
+                break;
+            case 'export-ai-results':
+                exportAIResults(_aiResults);
+                break;
+
+            // ── Actions / exports ──
+            case 'export-csv':
+                exportCSV();
+                break;
+            case 'copy-permalink':
+                copyPermalink();
+                break;
+            case 'show-global-table':
+                showGlobalTable();
+                break;
+            case 'show-trends':
+                showTrends();
+                break;
+            case 'show-compare':
+                showCompare();
+                break;
+            case 'show-review-queue':
+                showReviewQueue();
+                break;
+            case 'toggle-year-play':
+                toggleYearPlay();
+                break;
+            case 'export-country-report':
+                exportCountryReport(el.dataset.iso3);
+                break;
+            case 'export-comparison':
+                exportComparison(el.dataset.iso3A, el.dataset.iso3B);
+                break;
+
+            // ── Entity modal tabs ──
+            case 'switch-entity-tab':
+                switchEntityTab(el, el.dataset.tab);
+                break;
+
+            // ── Flag / review ──
+            case 'flag-facility':
+                flagFacility(el.dataset.entityId, parseInt(el.dataset.year));
+                break;
+            case 'unflag-facility':
+                unflagFacility(el.dataset.entityId, parseInt(el.dataset.year));
+                break;
+            case 'rq-unflag':
+                rqUnflag(el.dataset.entityId, parseInt(el.dataset.year), el);
+                break;
+            case 'review-show-entity':
+                bootstrap.Modal.getInstance(document.getElementById('review-modal'))?.hide();
+                showEntityModal(el.dataset.entityId);
+                break;
+
+            // ── Trends tabs ──
+            case 'switch-trends-tab':
+                switchTrendsTab(el.dataset.tab);
+                break;
+            case 'apply-organism-filter':
+                applyOrganismFilter(el.dataset.term);
+                break;
+
+            // ── Global table ──
+            case 'sort-global-table':
+                sortGlobalTable(el.dataset.col);
+                break;
+
+            // ── Legend ──
+            case 'toggle-legend':
+                toggleLegend(el);
+                break;
+
+            // ── Filter chip clears ──
+            case 'clear-ai-filter':
+                clearAIFilter();
+                break;
+            case 'clear-lapsed-chip': {
+                const lt = document.getElementById('lapsed-toggle');
+                if (lt) lt.checked = false;
+                onLapsedToggle();
+                break;
+            }
+            case 'clear-year-chip': {
+                const ay = document.getElementById('all-years');
+                if (ay) ay.checked = true;
+                onAllYearsToggle();
+                break;
+            }
+            case 'clear-hide-low-chip': {
+                const hl = document.getElementById('hide-low');
+                if (hl) hl.checked = false;
+                onFilterChange();
+                break;
+            }
+        }
+    });
+}
+
 // ── Utilities ──────────────────────────────────────────────────────────────
 
 function esc(s) {
@@ -2985,5 +3194,6 @@ function esc(s) {
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }

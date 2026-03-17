@@ -26,11 +26,11 @@
     <span id="stats-bar"></span>
     <div id="search-wrap">
         <input id="search-input" type="text" placeholder="Search facilities, organisms…" autocomplete="off">
-        <button id="search-mode-btn" onclick="toggleSearchMode()" title="Switch to AI natural language search">🤖</button>
+        <button id="search-mode-btn" data-action="toggle-search-mode" title="Switch to AI natural language search">🤖</button>
         <ul id="search-results"></ul>
     </div>
     <!-- Review queue button: badge shows count of flagged records; hidden when zero -->
-    <button id="navbar-review" onclick="showReviewQueue()" title="View all facilities flagged for review" style="display:none">
+    <button id="navbar-review" data-action="show-review-queue" title="View all facilities flagged for review" style="display:none">
         🚩 Review Queue <span id="review-badge" class="review-badge">0</span>
     </button>
     <button id="navbar-about" data-bs-toggle="modal" data-bs-target="#about-modal">About</button>
@@ -52,7 +52,7 @@
         </div>
         <div id="panel-detail" class="side-panel" style="display:none">
             <div class="side-header">
-                <button id="back-btn" onclick="showPanel('list')" title="Back">←</button>
+                <button id="back-btn" data-action="show-panel-list" title="Back">←</button>
                 <div class="ms-2" style="flex:1;min-width:0">
                     <div id="detail-title" class="side-title"></div>
                     <div id="detail-subtitle" class="detail-subtitle"></div>
@@ -60,12 +60,12 @@
             </div>
             <!-- Tab bar -->
             <div id="detail-tabs">
-                <button class="dtab active" data-tab="compliance" onclick="switchDetailTab('compliance')">Compliance</button>
-                <button class="dtab" data-tab="research"    onclick="switchDetailTab('research')">Research</button>
-                <button class="dtab" data-tab="defence"     onclick="switchDetailTab('defence')">Defence</button>
-                <button class="dtab" data-tab="vaccine"     onclick="switchDetailTab('vaccine')">Vaccine</button>
-                <button class="dtab" data-tab="legislation" onclick="switchDetailTab('legislation')">Law</button>
-                <button class="dtab" data-tab="history"     onclick="switchDetailTab('history')">History</button>
+                <button class="dtab active" data-action="switch-tab" data-tab="compliance">Compliance</button>
+                <button class="dtab" data-action="switch-tab" data-tab="research">Research</button>
+                <button class="dtab" data-action="switch-tab" data-tab="defence">Defence</button>
+                <button class="dtab" data-action="switch-tab" data-tab="vaccine">Vaccine</button>
+                <button class="dtab" data-action="switch-tab" data-tab="legislation">Law</button>
+                <button class="dtab" data-action="switch-tab" data-tab="history">History</button>
             </div>
             <div id="detail-loading" class="side-placeholder">Loading…</div>
             <div id="detail-content" style="display:none; flex:1; overflow:hidden; display:none; flex-direction:column">
@@ -92,8 +92,8 @@
                 <!-- Defence (A2) tab -->
                 <div id="tab-defence" class="tab-pane" style="display:none; height:100%; overflow:hidden; flex-direction:column">
                     <div id="defence-subtab-bar">
-                        <button class="dsubtab active" data-subtab="def-programmes" onclick="switchDefenceSubtab('def-programmes')">Programmes</button>
-                        <button class="dsubtab" data-subtab="def-facilities" onclick="switchDefenceSubtab('def-facilities')">Facilities</button>
+                        <button class="dsubtab active" data-action="switch-defence-subtab" data-subtab="def-programmes">Programmes</button>
+                        <button class="dsubtab" data-action="switch-defence-subtab" data-subtab="def-facilities">Facilities</button>
                     </div>
                     <div id="defence-content" class="side-scroll" style="height:calc(100% - 33px); overflow-y:auto"></div>
                 </div>
@@ -118,7 +118,7 @@
     </aside>
 
     <!-- Sidebar collapse tab (sits between sidebar and map) -->
-    <button id="sidebar-tab" onclick="toggleSidebar()" title="Collapse sidebar">◀</button>
+    <button id="sidebar-tab" data-action="toggle-sidebar" title="Collapse sidebar">◀</button>
 
     <!-- Map -->
     <div id="map">
@@ -127,19 +127,19 @@
         <div id="filter-panel">
             <div id="fp-header">
                 <span class="fp-title">Filters</span>
-                <button id="fp-collapse" onclick="toggleFilterPanel()" title="Collapse">−</button>
+                <button id="fp-collapse" data-action="toggle-filter-panel" title="Collapse">−</button>
             </div>
             <div id="fp-body">
 
                 <div class="fp-section">
                     <div class="fp-label">LAYERS</div>
-                    <label class="fp-check"><input type="checkbox" id="layer-A1" checked onchange="onFilterChange()">
+                    <label class="fp-check"><input type="checkbox" id="layer-A1" checked>
                         <span class="fp-layer-dot" style="background:#4a90d9"></span>Research (A1)
                     </label>
-                    <label class="fp-check"><input type="checkbox" id="layer-A2" checked onchange="onFilterChange()">
+                    <label class="fp-check"><input type="checkbox" id="layer-A2" checked>
                         <span class="fp-layer-dot" style="background:#8b1a1a"></span>Defence (A2)
                     </label>
-                    <label class="fp-check"><input type="checkbox" id="layer-G" checked onchange="onFilterChange()">
+                    <label class="fp-check"><input type="checkbox" id="layer-G" checked>
                         <span class="fp-layer-dot" style="background:#0a7a6a"></span>Vaccine (G)
                     </label>
                 </div>
@@ -148,20 +148,19 @@
                     <div class="fp-label">ORGANISM FILTER <span class="fp-sublabel">(Research only)</span></div>
                     <div class="fp-organism-wrap">
                         <input id="organism-input" type="text" class="fp-organism-input"
-                               placeholder="e.g. anthrax, influenza"
-                               oninput="onOrganismFilter(this.value)">
-                        <button id="organism-clear" class="fp-organism-clear" onclick="clearOrganismFilter()" style="display:none" title="Clear">×</button>
+                               placeholder="e.g. anthrax, influenza">
+                        <button id="organism-clear" class="fp-organism-clear" data-action="clear-organism" style="display:none" title="Clear">×</button>
                     </div>
                 </div>
 
                 <div class="fp-section">
                     <div class="fp-label">BSL LEVEL <span class="fp-sublabel">(Research / A1 only)</span></div>
                     <div class="fp-bsl-grid">
-                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-4" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#c0392b"></span>BSL‑4</label>
-                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-3" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#e67e22"></span>BSL‑3</label>
-                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-2" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#f39c12"></span>BSL‑2</label>
-                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-1" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#27ae60"></span>BSL‑1</label>
-                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="unknown" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#95a5a6"></span>Unknown</label>
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-4" checked><span class="fp-bsl-dot" style="background:#c0392b"></span>BSL‑4</label>
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-3" checked><span class="fp-bsl-dot" style="background:#e67e22"></span>BSL‑3</label>
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-2" checked><span class="fp-bsl-dot" style="background:#f39c12"></span>BSL‑2</label>
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-1" checked><span class="fp-bsl-dot" style="background:#27ae60"></span>BSL‑1</label>
+                        <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="unknown" checked><span class="fp-bsl-dot" style="background:#95a5a6"></span>Unknown</label>
                     </div>
                     <div id="bsl-warning" class="fp-bsl-note" style="display:none">
                         Defence &amp; Vaccine layers unaffected — use layer checkboxes above
@@ -170,36 +169,33 @@
 
                 <div class="fp-section">
                     <div class="fp-label">YEAR</div>
-                    <label class="fp-check"><input type="checkbox" id="all-years" checked onchange="onAllYearsToggle()"> Latest per country</label>
+                    <label class="fp-check"><input type="checkbox" id="all-years" checked> Latest per country</label>
                     <div class="fp-year-row">
-                        <button id="year-play" class="fp-play-btn" onclick="toggleYearPlay()" title="Animate through years" disabled>▶</button>
+                        <button id="year-play" class="fp-play-btn" data-action="toggle-year-play" title="Animate through years" disabled>▶</button>
                         <input type="number" id="year-input" min="1988" max="2025" value="2025" step="1" disabled
-                               placeholder="e.g. 2022"
-                               oninput="onYearInput(this.value)" onchange="onFilterChange()">
+                               placeholder="e.g. 2022">
                     </div>
                     <input type="range" id="year-slider" min="1988" max="2025" value="2025" step="1" disabled
-                           style="width:100%;margin:4px 0 0"
-                           oninput="onYearSlider(this.value)" onchange="onFilterChange()">
+                           style="width:100%;margin:4px 0 0">
                     <div class="fp-year-range"><span id="yr-min">1988</span><span id="yr-max">2025</span></div>
                 </div>
 
                 <div class="fp-section">
-                    <label class="fp-check"><input type="checkbox" id="hide-low" onchange="onFilterChange()"> Hide low-confidence geocodes</label>
+                    <label class="fp-check"><input type="checkbox" id="hide-low"> Hide low-confidence geocodes</label>
                 </div>
 
                 <!-- Lapsed declarations toggle: show facilities that went dark -->
                 <div class="fp-section" id="fp-lapsed-section">
                     <div class="fp-label">LAPSED DECLARATIONS <span class="fp-sublabel">(Research only)</span></div>
                     <label class="fp-check" style="margin-bottom:6px">
-                        <input type="checkbox" id="lapsed-toggle" onchange="onLapsedToggle()">
+                        <input type="checkbox" id="lapsed-toggle">
                         Show facilities that went dark
                     </label>
                     <div id="lapsed-threshold-row" style="display:none">
                         <div style="font-size:11px;color:#6070a0;margin-bottom:4px">
                             Lapsed if last declared ≥
                             <input type="number" id="lapsed-years" value="3" min="1" max="20"
-                                   style="width:42px;padding:1px 4px;font-size:11px;border:1px solid #c8d0e8;border-radius:3px;color:#2a3060;background:#eef1fa;text-align:center"
-                                   oninput="onLapsedThresholdChange(this.value)">
+                                   style="width:42px;padding:1px 4px;font-size:11px;border:1px solid #c8d0e8;border-radius:3px;color:#2a3060;background:#eef1fa;text-align:center">
                             years before country's latest CBM
                         </div>
                         <div class="fp-lapsed-legend">
@@ -212,7 +208,7 @@
                 <!-- FEATURE 4: Choropleth form selector -->
                 <div class="fp-section">
                     <div class="fp-label">CHOROPLETH <span class="fp-sublabel">(submission rate by form)</span></div>
-                    <select id="choro-form-select" class="fp-form-select" onchange="onChoroFormChange()">
+                    <select id="choro-form-select" class="fp-form-select">
                         <option value="A1">A1 — Research facilities</option>
                         <option value="A2">A2 — Defence programmes</option>
                         <option value="G">G — Vaccine facilities</option>
@@ -224,11 +220,11 @@
                 <div id="active-filter-chips" class="fp-section" style="display:none"></div>
 
                 <div class="fp-section fp-actions">
-                    <button class="fp-btn" onclick="exportCSV()">⬇ Export CSV</button>
-                    <button class="fp-btn" id="fp-copy" onclick="copyPermalink()">🔗 Copy link</button>
-                    <button class="fp-btn" onclick="showGlobalTable()">⊞ All countries</button>
-                    <button class="fp-btn" onclick="showTrends()">📈 Trends</button>
-                    <button class="fp-btn" id="fp-compare" onclick="showCompare()" title="Compare two countries side by side">⚖ Compare</button>
+                    <button class="fp-btn" data-action="export-csv">⬇ Export CSV</button>
+                    <button class="fp-btn" id="fp-copy" data-action="copy-permalink">🔗 Copy link</button>
+                    <button class="fp-btn" data-action="show-global-table">⊞ All countries</button>
+                    <button class="fp-btn" data-action="show-trends">📈 Trends</button>
+                    <button class="fp-btn" id="fp-compare" data-action="show-compare" title="Compare two countries side by side">⚖ Compare</button>
                 </div>
 
                 <!-- Active filter chips: shows what is currently filtering the map -->
@@ -369,9 +365,8 @@
                 <p class="text-muted small mb-2">Describe the facilities you're looking for in plain English. The AI will identify matching organisms, countries, and BSL levels from your query.</p>
                 <div class="ai-query-input-wrap">
                     <input id="ai-query-input" type="text" class="ai-query-input"
-                           placeholder="e.g. anthrax labs in Eastern Europe with BSL-3"
-                           onkeydown="if(event.key==='Enter') runAIQuery()">
-                    <button class="ai-query-btn" id="ai-query-submit" onclick="runAIQuery()">Search</button>
+                           placeholder="e.g. anthrax labs in Eastern Europe with BSL-3">
+                    <button class="ai-query-btn" id="ai-query-submit" data-action="run-ai-query">Search</button>
                 </div>
                 <div id="ai-query-rationale" class="ai-query-rationale" style="display:none"></div>
                 <div id="ai-query-results"></div>
@@ -407,14 +402,14 @@
                 <div class="cmp-selector-row">
                     <div class="cmp-selector-wrap">
                         <label class="cmp-selector-label">Country A</label>
-                        <select id="cmp-country-a" class="cmp-select" onchange="onCompareSelect()">
+                        <select id="cmp-country-a" class="cmp-select">
                             <option value="">— select country —</option>
                         </select>
                     </div>
                     <div class="cmp-vs">vs</div>
                     <div class="cmp-selector-wrap">
                         <label class="cmp-selector-label">Country B</label>
-                        <select id="cmp-country-b" class="cmp-select" onchange="onCompareSelect()">
+                        <select id="cmp-country-b" class="cmp-select">
                             <option value="">— select country —</option>
                         </select>
                     </div>
@@ -451,7 +446,7 @@
 </svg>
 
 <!-- ── Mobile sidebar backdrop ─────────────────────────────────────────── -->
-<div id="mobile-overlay" onclick="toggleSidebar()"></div>
+<div id="mobile-overlay" data-action="toggle-sidebar"></div>
 
 <!-- ── Scripts ─────────────────────────────────────────────────────────── -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>

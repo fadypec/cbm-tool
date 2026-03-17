@@ -125,18 +125,21 @@ def _json(data) -> JSONResponse:
 # Railway (and most reverse proxies) terminate TLS and forward traffic, so
 # request.client.host is always Railway's internal IP rather than the real
 # visitor's IP.  Railway sets the standard X-Forwarded-For header with the
-# actual client IP as the first entry.
+# actual client IP.
 #
-# get_client_ip() reads X-Forwarded-For when present, falling back to the
-# direct socket address for local development where no proxy is involved.
+# SECURITY: We trust the *rightmost* entry in X-Forwarded-For, because that
+# is the IP that Railway's edge proxy observed on the TCP connection — it
+# cannot be spoofed by the client.  The leftmost entries are client-supplied
+# and trivially forgeable (an attacker could set X-Forwarded-For: random-ip
+# to bypass per-IP rate limiting if we trusted the leftmost entry).
 
 def get_client_ip(request: Request) -> str:
-    """Return the real client IP, honouring Railway's X-Forwarded-For header."""
+    """Return the real client IP from the rightmost X-Forwarded-For entry."""
     xff = request.headers.get("X-Forwarded-For")
     if xff:
-        # X-Forwarded-For may be a comma-separated list; the leftmost entry is
-        # the original client (Railway appends its own IP on the right).
-        return xff.split(",")[0].strip()
+        # Rightmost entry is the one added by the trusted reverse proxy
+        # (Railway).  Client-supplied entries appear on the left.
+        return xff.split(",")[-1].strip()
     return request.client.host if request.client else "127.0.0.1"
 
 
@@ -176,13 +179,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         # Limit referrer information sent to third-party CDN resources
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        # Basic CSP: allow scripts/styles only from self and the two CDNs used by
+        # CSP: allow scripts/styles only from self and the two CDNs used by
         # the dashboard (Bootstrap from jsdelivr, Leaflet from unpkg).
-        # 'unsafe-inline' is required because the dashboard uses inline onclick
-        # attributes; tightening this would require migrating to event listeners.
+        # All inline event handlers have been migrated to addEventListener /
+        # data-action delegation, so 'unsafe-inline' is only needed for styles
+        # (Bootstrap utility classes inject inline styles).
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cloud.umami.is; "
+            "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://cloud.umami.is; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; "
             "img-src 'self' data: https:; "
             "connect-src 'self' https://cloud.umami.is; "
