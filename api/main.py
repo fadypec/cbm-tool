@@ -23,6 +23,8 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 from dotenv import load_dotenv
+import anthropic as _anthropic
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -758,6 +760,158 @@ def api_stats_timeline():
         "bsl4_facility_years": bsl4_years,
         "submitting_countries": countries,
     })
+
+
+# ── Pathogen frequency ────────────────────────────────────────────────────────
+
+# Curated list of BWC-relevant organisms — (display_label, SQL ILIKE term)
+PATHOGEN_TERMS: list[tuple[str, str]] = [
+    ("Anthrax",            "anthrax"),
+    ("Botulinum toxin",    "botulinum"),
+    ("Brucella",           "brucell"),
+    ("Plague",             "plague"),
+    ("Tularaemia",         "tularaem"),
+    ("Ebola",              "ebola"),
+    ("Marburg",            "marburg"),
+    ("Smallpox / Variola", "smallpox"),
+    ("Influenza",          "influenza"),
+    ("Tuberculosis",       "tuberculosis"),
+    ("Rabies",             "rabies"),
+    ("Salmonella",         "salmonella"),
+    ("West Nile virus",    "west nile"),
+    ("Dengue",             "dengue"),
+    ("Q fever / Coxiella", "coxiella"),
+    ("Rickettsia",         "rickettsia"),
+    ("Venezuelan EE",      "venezuelan equine"),
+    ("Foot-and-mouth",     "foot-and-mouth"),
+    ("Hantavirus",         "hantavirus"),
+    ("Coronavirus / SARS", "coronavirus"),
+]
+
+
+@app.get("/api/pathogens/frequency", summary="Count of unique research facilities per declared organism")
+def api_pathogens_frequency():
+    """Returns a sorted list of pathogen/organism mentions with counts of distinct facilities
+    (canonical_facility_id) that have declared work with each organism in Form A1 submissions."""
+    if not PATHOGEN_TERMS:
+        return _json([])
+    select_parts = [
+        f"COUNT(DISTINCT CASE WHEN agents_summary ILIKE %s THEN canonical_facility_id END) AS c_{i}"
+        for i in range(len(PATHOGEN_TERMS))
+    ]
+    sql = f"SELECT {', '.join(select_parts)} FROM facility_years WHERE agents_summary IS NOT NULL"
+    params = [f"%{term}%" for _, term in PATHOGEN_TERMS]
+    with cursor() as cur:
+        cur.execute(sql, params)
+        row = dict(cur.fetchone())
+    results = []
+    for i, (label, term) in enumerate(PATHOGEN_TERMS):
+        count = int(row.get(f"c_{i}") or 0)
+        if count > 0:
+            results.append({"label": label, "term": term, "count": count})
+    results.sort(key=lambda x: -x["count"])
+    return _json(results)
+
+
+# ── Natural language query ─────────────────────────────────────────────────────
+
+class NaturalQueryRequest(BaseModel):
+    q: str
+
+
+_NQ_SYSTEM = """You extract structured search filters from natural language queries about biological research facilities declared under the Biological Weapons Convention (BWC).
+
+Return ONLY a JSON object with these optional fields (omit fields that are not relevant):
+- "organisms": list of short organism/pathogen search terms for ILIKE matching (e.g. ["anthrax", "plague"])
+- "countries": list of ISO 3166-1 alpha-3 country codes (e.g. ["DEU", "POL", "USA"])
+- "bsl": list of BSL level strings (e.g. ["BSL-4", "BSL-3"])
+- "keywords": additional keywords to search in activity descriptions (beyond the organism list)
+- "rationale": one-sentence explanation of how you interpreted the query
+
+Examples:
+Input: "anthrax labs in Germany with BSL-3"
+Output: {"organisms":["anthrax"],"countries":["DEU"],"bsl":["BSL-3"],"rationale":"Looking for German labs declaring anthrax work at BSL-3."}
+
+Input: "university hospitals in the UK"
+Output: {"countries":["GBR"],"keywords":["university","hospital"],"rationale":"Looking for university or hospital facilities in the UK."}
+
+Return only valid JSON. Do not include any explanation outside the JSON object."""
+
+
+@app.post("/api/natural-query", summary="AI-powered natural language facility search")
+def api_natural_query(body: NaturalQueryRequest):
+    """Parse a natural language query into structured filters using Claude, then return matching
+    Form A1 research facilities. Requires ANTHROPIC_API_KEY environment variable."""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured on this server")
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    try:
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=_NQ_SYSTEM,
+            messages=[{"role": "user", "content": body.q}],
+        )
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        filters = json.loads(raw)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI parsing failed: {e}")
+
+    organisms = filters.get("organisms") or []
+    keywords  = filters.get("keywords")  or []
+    countries = filters.get("countries") or []
+    bsl_levels = filters.get("bsl")      or []
+    all_text   = organisms + keywords
+
+    conditions: list[str] = []
+    params: list = []
+
+    if all_text:
+        text_conds = " OR ".join(["fy.agents_summary ILIKE %s"] * len(all_text))
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM facility_years fy "
+            f"WHERE fy.canonical_facility_id = f.canonical_facility_id AND ({text_conds}))"
+        )
+        params.extend(f"%{t}%" for t in all_text)
+
+    if countries:
+        placeholders = ",".join(["%s"] * len(countries))
+        conditions.append(f"f.country_iso3 IN ({placeholders})")
+        params.extend(countries)
+
+    if bsl_levels:
+        bsl_conds = ["f.latest_containment ILIKE %s"] * len(bsl_levels)
+        conditions.append(f"({' OR '.join(bsl_conds)})")
+        params.extend(f"%{b}%" for b in bsl_levels)
+
+    if not conditions:
+        return _json({"filters": filters, "facilities": [],
+                      "rationale": filters.get("rationale", "No actionable filters found in query.")})
+
+    where_clause = " AND ".join(conditions)
+    with cursor() as cur:
+        cur.execute(f"""
+            SELECT f.canonical_facility_id AS id,
+                   f.canonical_name        AS name,
+                   f.country_iso3,
+                   f.latest_containment,
+                   f.years_declared,
+                   (SELECT d.country_name FROM documents d
+                    WHERE d.country_iso3 = f.country_iso3
+                      AND d.country_name IS NOT NULL LIMIT 1) AS country_name
+            FROM facilities f
+            WHERE {where_clause}
+            ORDER BY f.country_iso3, f.canonical_name NULLS LAST
+            LIMIT 150
+        """, params)
+        facilities = [dict(r) for r in cur.fetchall()]
+
+    return _json({"filters": filters, "facilities": facilities,
+                  "rationale": filters.get("rationale", "")})
 
 
 # ── FEATURE 8: Flag for review endpoints ──────────────────────────────────────

@@ -138,6 +138,16 @@
                 </div>
 
                 <div class="fp-section">
+                    <div class="fp-label">ORGANISM FILTER <span class="fp-sublabel">(Research only)</span></div>
+                    <div class="fp-organism-wrap">
+                        <input id="organism-input" type="text" class="fp-organism-input"
+                               placeholder="e.g. anthrax, influenza"
+                               oninput="onOrganismFilter(this.value)">
+                        <button id="organism-clear" class="fp-organism-clear" onclick="clearOrganismFilter()" style="display:none" title="Clear">×</button>
+                    </div>
+                </div>
+
+                <div class="fp-section">
                     <div class="fp-label">BSL LEVEL <span class="fp-sublabel">(Research / A1 only)</span></div>
                     <div class="fp-bsl-grid">
                         <label class="fp-check fp-bsl"><input type="checkbox" name="bsl" value="BSL-4" checked onchange="onFilterChange()"><span class="fp-bsl-dot" style="background:#c0392b"></span>BSL‑4</label>
@@ -182,12 +192,14 @@
                     </select>
                 </div>
 
+                <div id="active-filter-chips" class="fp-section" style="display:none"></div>
+
                 <div class="fp-section fp-actions">
                     <button class="fp-btn" onclick="exportCSV()">⬇ Export CSV</button>
                     <button class="fp-btn" id="fp-copy" onclick="copyPermalink()">🔗 Copy link</button>
                     <button class="fp-btn" onclick="showGlobalTable()">⊞ All countries</button>
-                    <!-- FEATURE 5: Trends button -->
                     <button class="fp-btn" onclick="showTrends()">📈 Trends</button>
+                    <button class="fp-btn" onclick="showAIQuery()">🤖 AI Query</button>
                 </div>
 
             </div><!-- /fp-body -->
@@ -308,6 +320,29 @@
             </div>
             <div class="modal-body" id="trends-body">
                 <div class="text-center py-4 text-muted">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── AI Query modal ───────────────────────────────────────────────────── -->
+<div class="modal fade" id="ai-query-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">🤖 AI Facility Search</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-2">Describe the facilities you're looking for in plain English. The AI will identify matching organisms, countries, and BSL levels from your query.</p>
+                <div class="ai-query-input-wrap">
+                    <input id="ai-query-input" type="text" class="ai-query-input"
+                           placeholder="e.g. anthrax labs in Eastern Europe with BSL-3"
+                           onkeydown="if(event.key==='Enter') runAIQuery()">
+                    <button class="ai-query-btn" id="ai-query-submit" onclick="runAIQuery()">Search</button>
+                </div>
+                <div id="ai-query-rationale" class="ai-query-rationale" style="display:none"></div>
+                <div id="ai-query-results"></div>
             </div>
         </div>
     </div>

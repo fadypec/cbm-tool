@@ -613,6 +613,200 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 }
 .leg-toggle:hover { color: #333; }
 
+/* ── Organism filter ────────────────────────────────────────────────────── */
+.fp-organism-wrap {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.fp-organism-input {
+    flex: 1;
+    padding: 4px 8px;
+    background: #eef1fa;
+    border: 1px solid #c8d0e8;
+    border-radius: 5px;
+    font-size: 12px;
+    color: #2a3060;
+    outline: none;
+    transition: border-color 0.15s;
+}
+.fp-organism-input:focus { border-color: #4a8ad4; }
+.fp-organism-input::placeholder { color: #a0a8c8; }
+.fp-organism-clear {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: 1px solid #c8d0e8;
+    border-radius: 4px;
+    color: #8090b0;
+    font-size: 13px;
+    padding: 2px 6px;
+    cursor: pointer;
+    line-height: 1;
+    transition: color 0.1s, border-color 0.1s;
+}
+.fp-organism-clear:hover { color: #2a3060; border-color: #8090b0; }
+
+/* ── Active filter chip (AI filter) ─────────────────────────────────────── */
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: #e8eeff;
+    border: 1px solid #b0bce8;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    color: #2a3060;
+}
+.filter-chip-clear {
+    background: none;
+    border: none;
+    color: #8090b0;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0 1px;
+    line-height: 1;
+    font-weight: 600;
+}
+.filter-chip-clear:hover { color: #2a3060; }
+
+/* ── Trends modal tabs ───────────────────────────────────────────────────── */
+#trends-tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 2px solid #dee2e6;
+    margin-bottom: 16px;
+}
+.trends-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 7px 16px;
+    font-size: 13px;
+    color: #6c757d;
+    cursor: pointer;
+    margin-bottom: -2px;
+    transition: color 0.15s, border-color 0.15s;
+}
+.trends-tab.active { color: #1a2060; border-bottom-color: #4a8ad4; font-weight: 600; }
+.trends-tab:hover  { color: #1a2060; }
+
+/* ── Pathogen frequency chart ────────────────────────────────────────────── */
+.pathogen-chart-header {
+    font-size: 11px;
+    color: #888;
+    font-style: italic;
+    margin-bottom: 14px;
+}
+.pathogen-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 3px;
+    transition: background 0.12s;
+}
+.pathogen-row:hover { background: #f0f4ff; }
+.pathogen-label {
+    width: 190px;
+    flex-shrink: 0;
+    font-size: 12px;
+    color: #333;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pathogen-bar-wrap {
+    flex: 1;
+    background: #eef1fa;
+    border-radius: 3px;
+    height: 14px;
+    overflow: hidden;
+}
+.pathogen-bar {
+    height: 100%;
+    background: #4a8ad4;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+    min-width: 2px;
+}
+.pathogen-count {
+    width: 30px;
+    text-align: right;
+    font-size: 11px;
+    color: #666;
+    flex-shrink: 0;
+}
+
+/* ── AI Query modal ──────────────────────────────────────────────────────── */
+.ai-query-input-wrap {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.ai-query-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #c8d0e8;
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+.ai-query-input:focus { border-color: #4a8ad4; }
+.ai-query-btn {
+    padding: 8px 18px;
+    background: #4a8ad4;
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+.ai-query-btn:hover:not(:disabled) { background: #2a6ab4; }
+.ai-query-btn:disabled { background: #a0b8d8; cursor: default; }
+.ai-query-rationale {
+    background: #f4f6ff;
+    border: 1px solid #c8d0e8;
+    border-radius: 5px;
+    padding: 7px 12px;
+    font-size: 12px;
+    color: #4a5280;
+    margin-bottom: 12px;
+    font-style: italic;
+}
+.ai-results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #555;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.ai-results-actions { display: flex; gap: 6px; }
+.ai-results-list {
+    border: 1px solid #e0e4ef;
+    border-radius: 6px;
+    overflow: hidden;
+    max-height: 380px;
+    overflow-y: auto;
+}
+.ai-result-item {
+    padding: 8px 12px;
+    border-bottom: 1px solid #eef0f8;
+}
+.ai-result-item:last-child { border-bottom: none; }
+.ai-result-name { font-size: 13px; color: #1a1e40; font-weight: 500; }
+.ai-result-meta { font-size: 11px; color: #777; margin-top: 2px; }
+
 /* ── Mobile overlay backdrop ────────────────────────────────────────────── */
 #mobile-overlay {
     display: none;

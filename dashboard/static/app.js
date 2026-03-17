@@ -14,10 +14,12 @@ const BWC_NON_PARTIES = new Set(['TCD', 'COM', 'DJI', 'ERI', 'ISR', 'FSM', 'NAM'
 // ── State ──────────────────────────────────────────────────────────────────
 
 const STATE = {
-    layers:  { A1: true, A2: true, G: true },
-    bsl:     { 'BSL-4': true, 'BSL-3': true, 'BSL-2': true, 'BSL-1': true, unknown: true },
-    year:    null,          // null = all years
-    hideLow: false,
+    layers:     { A1: true, A2: true, G: true },
+    bsl:        { 'BSL-4': true, 'BSL-3': true, 'BSL-2': true, 'BSL-1': true, unknown: true },
+    year:       null,   // null = all years
+    hideLow:    false,
+    organism:   '',     // organism text filter (A1 only)
+    aiFilterIds: null,  // Set of canonical_facility_ids from AI query (null = no filter)
 };
 
 // Raw GeoJSON data keyed by layer
@@ -226,7 +228,14 @@ function matchesFilter(layer, feature) {
         if (latest && p.year !== latest) return false;
     }
     if (STATE.hideLow && p.geocode_conf === 'low') return false;
-    if (layer === 'A1' && !STATE.bsl[normalizeBsl(p.containment)]) return false;
+    if (layer === 'A1') {
+        if (!STATE.bsl[normalizeBsl(p.containment)]) return false;
+        if (STATE.organism) {
+            const ag = (p.agents_summary || '').toLowerCase();
+            if (!ag.includes(STATE.organism.toLowerCase())) return false;
+        }
+        if (STATE.aiFilterIds && !STATE.aiFilterIds.has(p.id)) return false;
+    }
     return true;
 }
 
@@ -329,6 +338,61 @@ function onFilterChange() {
 
     applyFilters();
     updateStatsBar();
+}
+
+// ── Organism filter ─────────────────────────────────────────────────────────
+
+function onOrganismFilter(val) {
+    STATE.organism = val.trim();
+    updateOrganismClearBtn();
+    applyFilters();
+}
+
+function clearOrganismFilter() {
+    STATE.organism = '';
+    const input = document.getElementById('organism-input');
+    if (input) input.value = '';
+    updateOrganismClearBtn();
+    applyFilters();
+}
+
+function updateOrganismClearBtn() {
+    const btn = document.getElementById('organism-clear');
+    if (btn) btn.style.display = STATE.organism ? 'inline-flex' : 'none';
+}
+
+// Called from the pathogen chart — sets the filter and closes the trends modal.
+function applyOrganismFilter(term) {
+    STATE.organism = term;
+    const input = document.getElementById('organism-input');
+    if (input) input.value = term;
+    updateOrganismClearBtn();
+    const trendsEl = document.getElementById('trends-modal');
+    if (trendsEl) bootstrap.Modal.getInstance(trendsEl)?.hide();
+    applyFilters();
+}
+
+// ── AI filter ───────────────────────────────────────────────────────────────
+
+function clearAIFilter() {
+    STATE.aiFilterIds = null;
+    updateActiveFilterChips();
+    applyFilters();
+}
+
+function updateActiveFilterChips() {
+    const el = document.getElementById('active-filter-chips');
+    if (!el) return;
+    if (STATE.aiFilterIds) {
+        const n = STATE.aiFilterIds.size;
+        el.innerHTML =
+            `<span class="filter-chip">🤖 AI filter: ${n} facilit${n !== 1 ? 'ies' : 'y'} ` +
+            `<button class="filter-chip-clear" onclick="clearAIFilter()" title="Clear AI filter">×</button></span>`;
+        el.style.display = 'block';
+    } else {
+        el.innerHTML = '';
+        el.style.display = 'none';
+    }
 }
 
 function onAllYearsToggle() {
@@ -1470,22 +1534,79 @@ function renderGlobalTable(rows, sortCol, sortDir) {
     document.getElementById('gt-tbody').innerHTML = html;
 }
 
-// ── FEATURE 5: Longitudinal trends chart ──────────────────────────────────────
+// ── FEATURE 5: Longitudinal trends chart + pathogen frequency ─────────────────
+
+let _trendsChartLoaded = false;
+let _trendsPathogens   = null;  // null = not yet fetched
 
 async function showTrends() {
     const modalEl = document.getElementById('trends-modal');
     if (!modalEl) return;
     const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+
     document.getElementById('trends-body').innerHTML =
-        '<div class="text-center py-4 text-muted">Loading…</div>';
+        `<div id="trends-tab-bar">
+            <button class="trends-tab active" data-tab="chart"     onclick="switchTrendsTab('chart')">📈 Trends</button>
+            <button class="trends-tab"         data-tab="pathogens" onclick="switchTrendsTab('pathogens')">🦠 Pathogens</button>
+         </div>
+         <div id="trends-chart-panel"><div class="text-center py-4 text-muted">Loading…</div></div>
+         <div id="trends-pathogen-panel" style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>`;
+
+    _trendsChartLoaded = false;
+    _trendsPathogens   = null;
     modal.show();
+    loadTrendsChart();
+}
+
+function switchTrendsTab(tab) {
+    document.querySelectorAll('.trends-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === tab)
+    );
+    document.getElementById('trends-chart-panel').style.display    = tab === 'chart'     ? '' : 'none';
+    document.getElementById('trends-pathogen-panel').style.display = tab === 'pathogens' ? '' : 'none';
+    if (tab === 'pathogens' && !_trendsPathogens) loadPathogens();
+}
+
+async function loadTrendsChart() {
     try {
         const d = await api('/api/stats/timeline');
-        document.getElementById('trends-body').innerHTML = renderTrendsChart(d);
+        document.getElementById('trends-chart-panel').innerHTML = renderTrendsChart(d);
+        _trendsChartLoaded = true;
     } catch (e) {
-        document.getElementById('trends-body').innerHTML =
+        document.getElementById('trends-chart-panel').innerHTML =
             '<div class="text-danger">Failed to load timeline data.</div>';
     }
+}
+
+async function loadPathogens() {
+    const panel = document.getElementById('trends-pathogen-panel');
+    if (!panel) return;
+    try {
+        const data = await api('/api/pathogens/frequency');
+        _trendsPathogens = data;
+        renderPathogenChart(data, panel);
+    } catch (e) {
+        panel.innerHTML = '<div class="text-danger">Failed to load pathogen data.</div>';
+    }
+}
+
+function renderPathogenChart(data, container) {
+    if (!data || !data.length) {
+        container.innerHTML = '<div class="text-muted text-center py-4">No organism data available.</div>';
+        return;
+    }
+    const maxCount = Math.max(...data.map(d => d.count), 1);
+    container.innerHTML =
+        `<p class="pathogen-chart-header">Number of unique declared research facilities mentioning each organism. Click any row to filter the map.</p>` +
+        data.map(d => {
+            const pct = (d.count / maxCount * 100).toFixed(1);
+            const safeTerm = d.term.replace(/'/g, "\\'");
+            return `<div class="pathogen-row" onclick="applyOrganismFilter('${safeTerm}')">
+                <span class="pathogen-label">${esc(d.label)}</span>
+                <div class="pathogen-bar-wrap"><div class="pathogen-bar" style="width:${pct}%"></div></div>
+                <span class="pathogen-count">${d.count}</span>
+            </div>`;
+        }).join('');
 }
 
 /**
@@ -1625,6 +1746,106 @@ async function unflagFacility(entityId, year) {
     } catch (e) {
         alert('Failed to unflag record: ' + e.message);
     }
+}
+
+// ── AI Query ───────────────────────────────────────────────────────────────
+
+let _aiResults = null;  // last AI query result set, for export / show-on-map
+
+function showAIQuery() {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal')).show();
+}
+
+async function runAIQuery() {
+    const input      = document.getElementById('ai-query-input');
+    const resultsEl  = document.getElementById('ai-query-results');
+    const rationaleEl= document.getElementById('ai-query-rationale');
+    const btn        = document.getElementById('ai-query-submit');
+    const q = input?.value?.trim();
+    if (!q || q.length < 3) return;
+
+    resultsEl.innerHTML = '<div class="text-center py-3 text-muted">Querying AI…</div>';
+    rationaleEl.style.display = 'none';
+    if (btn) btn.disabled = true;
+
+    try {
+        const resp = await fetch('/api/natural-query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `${resp.status}`);
+        }
+        const data = await resp.json();
+
+        if (data.rationale) {
+            rationaleEl.textContent = '🤖 ' + data.rationale;
+            rationaleEl.style.display = 'block';
+        }
+
+        const facilities = data.facilities || [];
+        _aiResults = facilities;
+
+        if (!facilities.length) {
+            resultsEl.innerHTML = '<div class="text-muted text-center py-3">No matching facilities found. Try rephrasing your query.</div>';
+            return;
+        }
+
+        resultsEl.innerHTML =
+            `<div class="ai-results-header">
+                <span>${facilities.length} matching facilit${facilities.length !== 1 ? 'ies' : 'y'}</span>
+                <div class="ai-results-actions">
+                    <button class="fp-btn" onclick="applyAIFilter(_aiResults)">Show on map</button>
+                    <button class="fp-btn" onclick="exportAIResults(_aiResults)">Export CSV</button>
+                </div>
+             </div>
+             <div class="ai-results-list">` +
+            facilities.map(f =>
+                `<div class="ai-result-item">
+                    <div class="ai-result-name">${esc(f.name || '[Unnamed]')}</div>
+                    <div class="ai-result-meta">
+                        ${esc(f.country_name || f.country_iso3)}
+                        ${f.latest_containment
+                            ? ` &nbsp;·&nbsp; <span style="color:${bslColor(f.latest_containment)}">${esc(f.latest_containment)}</span>`
+                            : ''}
+                    </div>
+                 </div>`
+            ).join('') +
+            `</div>`;
+    } catch (e) {
+        const hint = e.message.includes('503') ? ' — ANTHROPIC_API_KEY not configured on this server' : '';
+        resultsEl.innerHTML = `<div class="text-danger">Search failed: ${esc(e.message)}${hint}</div>`;
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+function applyAIFilter(facilities) {
+    if (!facilities || !facilities.length) return;
+    STATE.aiFilterIds = new Set(facilities.map(f => f.id).filter(Boolean));
+    bootstrap.Modal.getInstance(document.getElementById('ai-query-modal'))?.hide();
+    updateActiveFilterChips();
+    applyFilters();
+}
+
+function exportAIResults(facilities) {
+    if (!facilities || !facilities.length) return;
+    const header = ['id', 'name', 'country_iso3', 'country_name', 'latest_containment', 'years_declared'];
+    const rows = [header, ...facilities.map(f => [
+        f.id || '', f.name || '', f.country_iso3 || '', f.country_name || '',
+        f.latest_containment || '',
+        (f.years_declared || []).join('|'),
+    ])];
+    const csv = rows.map(r =>
+        r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
+    ).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    a.download = 'cbm-ai-results.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────
