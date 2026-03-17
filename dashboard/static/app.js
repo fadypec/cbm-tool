@@ -1281,60 +1281,82 @@ async function showEntityModal(entityId) {
 
 function renderEntityModal(data) {
     document.getElementById('modal-title').textContent = data.canonical_name || '[Unnamed facility]';
+    const yr = data.year_records || [];
 
-    let html = `
-        <div class="text-muted small mb-3">
+    const header = `
+        <div class="text-muted small mb-2">
             <strong>${esc(data.country_name || data.country_iso3)}</strong>
             &nbsp;·&nbsp; ID: <code>${esc(data.canonical_facility_id)}</code>
             ${data.latest_containment
                 ? `&nbsp;·&nbsp; <span style="color:${bslColor(data.latest_containment)}">${esc(data.latest_containment)}</span>`
                 : ''}
-        </div>`;
+            &nbsp;·&nbsp; ${yr.length} year${yr.length !== 1 ? 's' : ''} on record
+        </div>
+        ${data.all_names && data.all_names.length > 1
+            ? `<div class="mb-2"><small class="text-muted"><strong>Also known as:</strong> ${data.all_names.map(esc).join('; ')}</small></div>`
+            : ''}`;
 
-    if (data.all_names && data.all_names.length > 1) {
-        html += `<div class="mb-3"><small class="text-muted"><strong>Also known as:</strong> ${data.all_names.map(esc).join('; ')}</small></div>`;
-    }
-
-    html += (data.year_records || []).map(yr => {
-        const bsl4 = yr.has_bsl4 != null
-            ? (yr.has_bsl4 ? `Yes${yr.bsl4_area_m2 ? ` (${yr.bsl4_area_m2} m²)` : ''}` : 'No') : null;
-        const bsl3 = yr.has_bsl3 != null
-            ? (yr.has_bsl3 ? `Yes${yr.bsl3_area_m2 ? ` (${yr.bsl3_area_m2} m²)` : ''}` : 'No') : null;
+    // Build year-records panel
+    const recordsHtml = yr.map(rec => {
+        const bsl4 = rec.has_bsl4 != null
+            ? (rec.has_bsl4 ? `Yes${rec.bsl4_area_m2 ? ` (${rec.bsl4_area_m2} m²)` : ''}` : 'No') : null;
+        const bsl3 = rec.has_bsl3 != null
+            ? (rec.has_bsl3 ? `Yes${rec.bsl3_area_m2 ? ` (${rec.bsl3_area_m2} m²)` : ''}` : 'No') : null;
         const kvs = [
-            ['Facility name',       yr.facility_name],
-            ['Organisation',        yr.responsible_org],
-            ['City',                yr.city],
-            ['Address',             yr.address],
+            ['Facility name',       rec.facility_name],
+            ['Organisation',        rec.responsible_org],
+            ['City',                rec.city],
+            ['Address',             rec.address],
             ['BSL-4 unit',          bsl4],
             ['BSL-3 unit',          bsl3],
-            ['Highest containment', yr.highest_containment],
-            ['MoD funded',          yr.mod_funded != null ? (yr.mod_funded ? 'Yes' : 'No') : null],
-            ['Agents / activities', yr.agents_summary],
+            ['Highest containment', rec.highest_containment],
+            ['MoD funded',          rec.mod_funded != null ? (rec.mod_funded ? 'Yes' : 'No') : null],
+            ['Agents / activities', rec.agents_summary],
         ].filter(([, v]) => v);
-
-        // FEATURE 8: flag button / badge per year-record
-        const flagUI = yr.flagged_for_review
-            ? `<span class="flag-badge">🚩 Flagged${yr.flag_note ? ': ' + esc(yr.flag_note) : ''}</span>
-               <button class="flag-btn ms-2" onclick="unflagFacility('${esc(data.canonical_facility_id)}',${yr.year})">Unflag</button>`
-            : `<button class="flag-btn" onclick="flagFacility('${esc(data.canonical_facility_id)}',${yr.year})">Flag for review</button>`;
-
+        const flagUI = rec.flagged_for_review
+            ? `<span class="flag-badge">🚩 Flagged${rec.flag_note ? ': ' + esc(rec.flag_note) : ''}</span>
+               <button class="flag-btn ms-2" onclick="unflagFacility('${esc(data.canonical_facility_id)}',${rec.year})">Unflag</button>`
+            : `<button class="flag-btn" onclick="flagFacility('${esc(data.canonical_facility_id)}',${rec.year})">Flag for review</button>`;
         return `
             <div class="year-record">
-                <div class="yr-head">${yr.year}
-                    ${yr.source_url
-                        ? `<a href="${esc(yr.source_url)}" target="_blank" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
-                        : `<small class="text-muted fw-normal ms-2">${esc(yr.document_id)}</small>`}
-                    ${yr.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(yr.confidence * 100)}%</small>` : ''}
-                    ${yr.geocode_confidence ? `<small class="text-muted fw-normal ms-2">geocode: ${yr.geocode_confidence}</small>` : ''}
+                <div class="yr-head">${rec.year}
+                    ${rec.source_url
+                        ? `<a href="${esc(rec.source_url)}" target="_blank" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
+                        : `<small class="text-muted fw-normal ms-2">${esc(rec.document_id)}</small>`}
+                    ${rec.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(rec.confidence * 100)}%</small>` : ''}
+                    ${rec.geocode_confidence ? `<small class="text-muted fw-normal ms-2">geocode: ${rec.geocode_confidence}</small>` : ''}
                     ${flagUI}
                 </div>
-                <dl class="yr-kv">
-                    ${kvs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join('')}
-                </dl>
+                <dl class="yr-kv">${kvs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join('')}</dl>
             </div>`;
     }).join('') || '<div class="text-muted">No year records found.</div>';
 
+    // Build changes panel (only show tab if ≥2 records)
+    const changesHtml = renderFacilityChangesTab(yr);
+    const showChangeTab = yr.length >= 2;
+
+    const tabBar = `<div class="em-tab-bar">
+        <button class="em-tab active" data-tab="records" onclick="switchEntityTab(this,'records')">Year records (${yr.length})</button>
+        ${showChangeTab ? `<button class="em-tab" data-tab="changes" onclick="switchEntityTab(this,'changes')">Changes</button>` : ''}
+    </div>`;
+
+    const html = header + tabBar +
+        `<div id="em-records-panel">${recordsHtml}</div>` +
+        (showChangeTab ? `<div id="em-changes-panel" style="display:none">${changesHtml}</div>` : '');
+
     document.getElementById('modal-body').innerHTML = html;
+}
+
+function switchEntityTab(btn, tab) {
+    btn.closest('.em-tab-bar').querySelectorAll('.em-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === tab)
+    );
+    const body = document.getElementById('modal-body');
+    const panels = { records: 'em-records-panel', changes: 'em-changes-panel' };
+    Object.entries(panels).forEach(([key, id]) => {
+        const el = body.querySelector(`#${id}`);
+        if (el) el.style.display = key === tab ? '' : 'none';
+    });
 }
 
 // ── Search ─────────────────────────────────────────────────────────────────
@@ -1538,6 +1560,7 @@ function renderGlobalTable(rows, sortCol, sortDir) {
 
 let _trendsChartLoaded = false;
 let _trendsPathogens   = null;  // null = not yet fetched
+let _trendsChanges     = null;  // null = not yet fetched
 
 async function showTrends() {
     const modalEl = document.getElementById('trends-modal');
@@ -1548,12 +1571,15 @@ async function showTrends() {
         `<div id="trends-tab-bar">
             <button class="trends-tab active" data-tab="chart"     onclick="switchTrendsTab('chart')">📈 Trends</button>
             <button class="trends-tab"         data-tab="pathogens" onclick="switchTrendsTab('pathogens')">🦠 Pathogens</button>
+            <button class="trends-tab"         data-tab="changes"   onclick="switchTrendsTab('changes')">🔄 Changes</button>
          </div>
          <div id="trends-chart-panel"><div class="text-center py-4 text-muted">Loading…</div></div>
-         <div id="trends-pathogen-panel" style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>`;
+         <div id="trends-pathogen-panel" style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>
+         <div id="trends-changes-panel" style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>`;
 
     _trendsChartLoaded = false;
     _trendsPathogens   = null;
+    _trendsChanges     = null;
     modal.show();
     loadTrendsChart();
 }
@@ -1564,7 +1590,9 @@ function switchTrendsTab(tab) {
     );
     document.getElementById('trends-chart-panel').style.display    = tab === 'chart'     ? '' : 'none';
     document.getElementById('trends-pathogen-panel').style.display = tab === 'pathogens' ? '' : 'none';
+    document.getElementById('trends-changes-panel').style.display  = tab === 'changes'   ? '' : 'none';
     if (tab === 'pathogens' && !_trendsPathogens) loadPathogens();
+    if (tab === 'changes'   && !_trendsChanges)   loadNotableChanges();
 }
 
 async function loadTrendsChart() {
@@ -1746,6 +1774,146 @@ async function unflagFacility(entityId, year) {
     } catch (e) {
         alert('Failed to unflag record: ' + e.message);
     }
+}
+
+// ── Notable changes ────────────────────────────────────────────────────────
+
+async function loadNotableChanges() {
+    const panel = document.getElementById('trends-changes-panel');
+    if (!panel) return;
+    try {
+        const data = await api('/api/changes/notable');
+        _trendsChanges = data;
+        renderChangesPanel(data, panel);
+    } catch (e) {
+        panel.innerHTML = '<div class="text-danger">Failed to load changes data.</div>';
+    }
+}
+
+const _CHG_SEVERITY = { high: { cls: 'chg-high', label: 'High' }, medium: { cls: 'chg-med', label: 'Medium' } };
+const _CHG_ICONS = {
+    bsl4_gained:      '⬆ BSL-4 gained',
+    bsl4_lost:        '⬇ BSL-4 lost',
+    bsl4_area_change: '📐 BSL-4 area',
+    bsl3_area_change: '📐 BSL-3 area',
+    containment_change: '🔒 Containment',
+    personnel_change:   '👥 Personnel',
+};
+
+function renderChangesPanel(data, container) {
+    if (!data || !data.length) {
+        container.innerHTML = '<div class="text-muted text-center py-4">No notable changes found in the dataset.</div>';
+        return;
+    }
+
+    // Group by type for a summary header
+    const byType = {};
+    data.forEach(c => { byType[c.type] = (byType[c.type] || 0) + 1; });
+
+    const summary = Object.entries(byType)
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, n]) => `<span class="chg-summary-item">${_CHG_ICONS[t] || t}: <strong>${n}</strong></span>`)
+        .join('');
+
+    container.innerHTML =
+        `<div class="chg-summary">${summary}</div>` +
+        `<p class="chg-header">Year-on-year changes at facilities with ≥3 years on record. Click a row to open the facility.</p>` +
+        data.map(c => {
+            const sev = _CHG_SEVERITY[c.severity] || { cls: 'chg-med', label: '' };
+            const icon = _CHG_ICONS[c.type] || '•';
+            const yearRange = `${c.from_year}→${c.to_year}`;
+            const onclick = c.canonical_facility_id
+                ? `showEntityModal('${c.canonical_facility_id}')`
+                : `selectCountry('${c.country_iso3}')`;
+            return `<div class="chg-row ${sev.cls}" onclick="${onclick}">
+                <div class="chg-left">
+                    <span class="chg-type-icon">${icon}</span>
+                    <div>
+                        <div class="chg-facility">${esc(c.facility_name || '[Unnamed]')}</div>
+                        <div class="chg-meta">${esc(c.country_name || c.country_iso3)} &nbsp;·&nbsp; ${yearRange} &nbsp;·&nbsp; ${c.years_on_record} yrs on record</div>
+                    </div>
+                </div>
+                <div class="chg-detail">${esc(c.label)}</div>
+            </div>`;
+        }).join('');
+}
+
+// Per-facility change diff (used in entity modal "Changes" tab)
+function computeFacilityDiffs(yearRecords) {
+    // yearRecords are ordered DESC by year; reverse for sequential comparison
+    const asc = [...yearRecords].reverse();
+    const diffs = [];
+    for (let i = 1; i < asc.length; i++) {
+        const prev = asc[i - 1], curr = asc[i];
+        if (curr.year - prev.year > 4) continue; // skip long gaps
+
+        const items = [];
+
+        // Containment level
+        if (prev.highest_containment !== curr.highest_containment &&
+            prev.highest_containment && curr.highest_containment) {
+            items.push({ key: 'Containment', from: prev.highest_containment, to: curr.highest_containment, dir: '' });
+        }
+
+        // BSL-4 area
+        const p4 = prev.bsl4_area_m2, c4 = curr.bsl4_area_m2;
+        if (p4 != null && c4 != null && p4 !== c4) {
+            const pct = p4 > 0 ? ((c4 - p4) / p4 * 100).toFixed(0) : null;
+            items.push({ key: 'BSL-4 area (m²)', from: p4, to: c4,
+                         dir: c4 > p4 ? 'up' : 'down', pct });
+        } else if (!p4 && c4) {
+            items.push({ key: 'BSL-4 area (m²)', from: 'none', to: c4, dir: 'up' });
+        } else if (p4 && !c4) {
+            items.push({ key: 'BSL-4 area (m²)', from: p4, to: 'none declared', dir: 'down' });
+        }
+
+        // BSL-3 area
+        const p3 = prev.bsl3_area_m2, c3 = curr.bsl3_area_m2;
+        if (p3 != null && c3 != null && p3 !== c3) {
+            const pct = p3 > 0 ? ((c3 - p3) / p3 * 100).toFixed(0) : null;
+            items.push({ key: 'BSL-3 area (m²)', from: p3, to: c3,
+                         dir: c3 > p3 ? 'up' : 'down', pct });
+        }
+
+        // Personnel
+        const pp = prev.personnel_total, cp = curr.personnel_total;
+        if (pp != null && cp != null && pp !== cp) {
+            const pct = pp > 0 ? ((cp - pp) / pp * 100).toFixed(0) : null;
+            items.push({ key: 'Personnel (total)', from: pp, to: cp,
+                         dir: cp > pp ? 'up' : 'down', pct });
+        }
+
+        // MoD funded status
+        if (prev.mod_funded != null && curr.mod_funded != null && prev.mod_funded !== curr.mod_funded) {
+            items.push({ key: 'MoD funded', from: prev.mod_funded ? 'Yes' : 'No',
+                         to: curr.mod_funded ? 'Yes' : 'No', dir: '' });
+        }
+
+        if (items.length) diffs.push({ from_year: prev.year, to_year: curr.year, items });
+    }
+    return diffs.reverse(); // most recent first
+}
+
+function renderFacilityChangesTab(yearRecords) {
+    const diffs = computeFacilityDiffs(yearRecords);
+    if (!diffs.length) {
+        return '<div class="text-muted p-3" style="font-size:13px">No notable year-on-year changes detected.</div>';
+    }
+    return diffs.map(d =>
+        `<div class="fac-diff-block">
+            <div class="fac-diff-head">${d.from_year} → ${d.to_year}</div>
+            ${d.items.map(item => {
+                const arrow = item.dir === 'up'   ? '<span class="diff-arrow up">▲</span>'
+                            : item.dir === 'down' ? '<span class="diff-arrow down">▼</span>'
+                            : '<span class="diff-arrow">↔</span>';
+                const pct = item.pct ? ` <span class="diff-pct">(${item.pct > 0 ? '+' : ''}${item.pct}%)</span>` : '';
+                return `<div class="fac-diff-row">
+                    <span class="diff-key">${esc(item.key)}</span>
+                    <span class="diff-val">${esc(String(item.from))} ${arrow} <strong>${esc(String(item.to))}</strong>${pct}</span>
+                </div>`;
+            }).join('')}
+        </div>`
+    ).join('');
 }
 
 // ── AI Query ───────────────────────────────────────────────────────────────

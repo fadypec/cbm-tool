@@ -807,6 +807,104 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 .ai-result-name { font-size: 13px; color: #1a1e40; font-weight: 500; }
 .ai-result-meta { font-size: 11px; color: #777; margin-top: 2px; }
 
+/* ── Entity modal tabs ──────────────────────────────────────────────────── */
+.em-tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 2px solid #dee2e6;
+    margin-bottom: 16px;
+}
+.em-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 14px;
+    font-size: 12px;
+    color: #6c757d;
+    cursor: pointer;
+    margin-bottom: -2px;
+    transition: color 0.15s, border-color 0.15s;
+}
+.em-tab.active { color: #1a2060; border-bottom-color: #4a8ad4; font-weight: 600; }
+.em-tab:hover  { color: #1a2060; }
+
+/* ── Per-facility diff view ─────────────────────────────────────────────── */
+.fac-diff-block {
+    border: 1px solid #e0e4ef;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+}
+.fac-diff-head {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1a1e40;
+    margin-bottom: 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #eef0f8;
+}
+.fac-diff-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 3px 0;
+    font-size: 12px;
+    border-bottom: 1px solid #f4f5fa;
+}
+.fac-diff-row:last-child { border-bottom: none; }
+.diff-key  { color: #777; flex-shrink: 0; width: 140px; }
+.diff-val  { color: #222; text-align: right; }
+.diff-pct  { color: #888; font-size: 11px; margin-left: 4px; }
+.diff-arrow        { font-size: 10px; margin: 0 3px; }
+.diff-arrow.up     { color: #c0392b; }
+.diff-arrow.down   { color: #27ae60; }
+
+/* ── Notable changes panel (global Trends tab) ──────────────────────────── */
+.chg-summary {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: #f4f6ff;
+    border-radius: 6px;
+    font-size: 11px;
+}
+.chg-summary-item { color: #4a5280; }
+.chg-header {
+    font-size: 11px;
+    color: #888;
+    font-style: italic;
+    margin-bottom: 10px;
+}
+.chg-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    margin-bottom: 4px;
+    border-left: 3px solid transparent;
+    transition: background 0.12s;
+}
+.chg-row:hover { background: #f0f4ff; }
+.chg-high { border-left-color: #c0392b; }
+.chg-med  { border-left-color: #e67e22; }
+.chg-left {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+}
+.chg-type-icon { font-size: 11px; color: #888; flex-shrink: 0; padding-top: 1px; }
+.chg-facility  { font-size: 12px; font-weight: 600; color: #1a1e40; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px; }
+.chg-meta      { font-size: 11px; color: #888; margin-top: 1px; }
+.chg-detail    { font-size: 11px; color: #555; text-align: right; flex-shrink: 0; max-width: 200px; }
+
 /* ── Mobile overlay backdrop ────────────────────────────────────────────── */
 #mobile-overlay {
     display: none;

@@ -25,10 +25,13 @@ import psycopg2.pool
 from dotenv import load_dotenv
 import anthropic as _anthropic
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel  # FEATURE 8: for flag request body
+from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -94,6 +97,8 @@ def _json(data) -> JSONResponse:
 
 # ── App ──────────────────────────────────────────────────────────────────────
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title="CBM Facility Explorer",
     version="1.0",
@@ -101,6 +106,8 @@ app = FastAPI(
     docs_url="/api/docs",
     redoc_url="/api/redoc",
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.mount("/static", StaticFiles(directory=DASHBOARD_DIR / "static"), name="static")
 
@@ -762,6 +769,144 @@ def api_stats_timeline():
     })
 
 
+# ── Notable changes ───────────────────────────────────────────────────────────
+
+@app.get("/api/changes/notable", summary="Notable year-on-year changes at long-established facilities")
+def api_changes_notable(min_years: int = Query(default=3, ge=1, description="Minimum years of prior declarations before a change counts as notable")):
+    """
+    Finds the most significant year-on-year changes across all Form A1 research facilities:
+    - BSL-4 or BSL-3 containment area increases / decreases
+    - Facilities gaining or losing BSL-4 status
+    - Large personnel changes
+    - Facilities that stopped being declared after N+ years of continuous reporting
+    Only considers facilities that had at least `min_years` prior declarations.
+    """
+    with cursor() as cur:
+        # Fetch all year records for multi-year facilities, ordered for diff computation
+        cur.execute("""
+            SELECT
+                fy.canonical_facility_id,
+                COALESCE(f.canonical_name, fy.facility_name) AS facility_name,
+                fy.country_iso3,
+                (SELECT d.country_name FROM documents d
+                 WHERE d.country_iso3 = fy.country_iso3
+                   AND d.country_name IS NOT NULL LIMIT 1) AS country_name,
+                fy.year,
+                fy.has_bsl4,
+                fy.bsl4_area_m2,
+                fy.has_bsl3,
+                fy.bsl3_area_m2,
+                fy.highest_containment,
+                fy.personnel_total,
+                fy.agents_summary
+            FROM facility_years fy
+            JOIN facilities f ON f.canonical_facility_id = fy.canonical_facility_id
+            WHERE fy.year IS NOT NULL
+            ORDER BY fy.canonical_facility_id, fy.year
+        """)
+        rows = cur.fetchall()
+
+    # Group by facility
+    from collections import defaultdict
+    by_fac: dict = defaultdict(list)
+    for r in rows:
+        by_fac[r["canonical_facility_id"]].append(dict(r))
+
+    changes = []
+    for fac_id, records in by_fac.items():
+        if len(records) < min_years:
+            continue
+        meta = records[-1]  # use most recent record for name/country
+        for i in range(1, len(records)):
+            prev, curr = records[i - 1], records[i]
+            # Only consider consecutive (or near-consecutive) years
+            if curr["year"] - prev["year"] > 3:
+                continue
+
+            diffs = []
+
+            # BSL-4 status gained/lost
+            if prev["has_bsl4"] is False and curr["has_bsl4"] is True:
+                diffs.append({"type": "bsl4_gained", "label": "BSL-4 status gained",
+                              "severity": "high"})
+            elif prev["has_bsl4"] is True and curr["has_bsl4"] is False:
+                diffs.append({"type": "bsl4_lost", "label": "BSL-4 status lost",
+                              "severity": "medium"})
+
+            # BSL-4 area change
+            p4 = prev["bsl4_area_m2"]
+            c4 = curr["bsl4_area_m2"]
+            if p4 and c4 and p4 > 0:
+                pct = (c4 - p4) / p4 * 100
+                if abs(pct) >= 20:
+                    direction = "increased" if pct > 0 else "decreased"
+                    diffs.append({
+                        "type": "bsl4_area_change",
+                        "label": f"BSL-4 area {direction} {abs(pct):.0f}% ({p4:.0f}→{c4:.0f} m²)",
+                        "severity": "high" if abs(pct) >= 50 else "medium",
+                        "delta_pct": round(pct, 1),
+                        "from_m2": p4, "to_m2": c4,
+                    })
+
+            # BSL-3 area change
+            p3 = prev["bsl3_area_m2"]
+            c3 = curr["bsl3_area_m2"]
+            if p3 and c3 and p3 > 0:
+                pct = (c3 - p3) / p3 * 100
+                if abs(pct) >= 30:
+                    direction = "increased" if pct > 0 else "decreased"
+                    diffs.append({
+                        "type": "bsl3_area_change",
+                        "label": f"BSL-3 area {direction} {abs(pct):.0f}% ({p3:.0f}→{c3:.0f} m²)",
+                        "severity": "medium",
+                        "delta_pct": round(pct, 1),
+                        "from_m2": p3, "to_m2": c3,
+                    })
+
+            # Containment level change
+            if prev["highest_containment"] and curr["highest_containment"] and \
+               prev["highest_containment"] != curr["highest_containment"]:
+                diffs.append({
+                    "type": "containment_change",
+                    "label": f"Containment level changed: {prev['highest_containment']} → {curr['highest_containment']}",
+                    "severity": "high",
+                    "from": prev["highest_containment"],
+                    "to":   curr["highest_containment"],
+                })
+
+            # Personnel change
+            pp = prev["personnel_total"]
+            cp = curr["personnel_total"]
+            if pp and cp and pp > 0:
+                pct = (cp - pp) / pp * 100
+                if abs(pct) >= 40 and abs(cp - pp) >= 10:
+                    direction = "increased" if pct > 0 else "decreased"
+                    diffs.append({
+                        "type": "personnel_change",
+                        "label": f"Personnel {direction} {abs(pct):.0f}% ({pp}→{cp})",
+                        "severity": "medium",
+                        "delta_pct": round(pct, 1),
+                        "from_count": pp, "to_count": cp,
+                    })
+
+            for diff in diffs:
+                changes.append({
+                    "canonical_facility_id": fac_id,
+                    "facility_name": meta["facility_name"],
+                    "country_iso3":  meta["country_iso3"],
+                    "country_name":  meta["country_name"],
+                    "from_year": prev["year"],
+                    "to_year":   curr["year"],
+                    "years_on_record": len(records),
+                    **diff,
+                })
+
+    # Sort: high severity first, then by year desc
+    sev_order = {"high": 0, "medium": 1, "low": 2}
+    changes.sort(key=lambda x: (sev_order.get(x["severity"], 9), -x["to_year"]))
+    return _json(changes[:200])
+
+
 # ── Pathogen frequency ────────────────────────────────────────────────────────
 
 # Curated list of BWC-relevant organisms — (display_label, SQL ILIKE term)
@@ -839,9 +984,11 @@ Return only valid JSON. Do not include any explanation outside the JSON object."
 
 
 @app.post("/api/natural-query", summary="AI-powered natural language facility search")
-def api_natural_query(body: NaturalQueryRequest):
+@limiter.limit("10/minute")
+def api_natural_query(request: Request, body: NaturalQueryRequest):
     """Parse a natural language query into structured filters using Claude, then return matching
-    Form A1 research facilities. Requires ANTHROPIC_API_KEY environment variable."""
+    Form A1 research facilities. Requires ANTHROPIC_API_KEY environment variable.
+    Rate-limited to 10 requests per minute per IP."""
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured on this server")
