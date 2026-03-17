@@ -26,8 +26,10 @@ from dotenv import load_dotenv
 import anthropic as _anthropic
 
 from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -39,7 +41,15 @@ PROJECT_ROOT  = Path(__file__).resolve().parent.parent
 DASHBOARD_DIR = PROJECT_ROOT / "dashboard"
 
 load_dotenv(PROJECT_ROOT / ".env")
-DB_URL = os.getenv("DATABASE_URL", "postgresql://cbm:cbm@localhost:5432/cbm")
+
+DB_URL = os.getenv("DATABASE_URL")
+if not DB_URL:
+    # Fail immediately rather than silently using a default with weak credentials
+    raise RuntimeError("DATABASE_URL environment variable is not set")
+
+# Set ENVIRONMENT=dev to enable the interactive API docs at /api/docs and /api/redoc.
+# In any other environment the docs are disabled to reduce information exposure.
+ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 
 # If set, all write endpoints (flag/unflag, review queue) require this key in
 # the X-Review-Key header.  Leave unset only in fully-private deployments.
@@ -110,17 +120,76 @@ def _json(data) -> JSONResponse:
 
 # ── App ──────────────────────────────────────────────────────────────────────
 
-limiter = Limiter(key_func=get_remote_address)
+# Global default: 60 requests/minute per IP for all endpoints.
+# Heavy GeoJSON map dumps are overridden to 20/minute at the route level.
+# The AI natural-query endpoint is overridden to 10/minute.
+# NOTE: If deployed behind a reverse proxy (nginx, etc.) all requests arrive
+# from 127.0.0.1.  In that case, configure the proxy to set X-Real-IP and use
+# a key_func that reads it, or raise the global limit and rely on the proxy's
+# own rate limiting instead.
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 app = FastAPI(
     title="CBM Facility Explorer",
     version="1.0",
     lifespan=lifespan,
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
+    # Docs only enabled when ENVIRONMENT=dev — reduces attack surface in production
+    docs_url="/api/docs"       if ENVIRONMENT == "dev" else None,
+    redoc_url="/api/redoc"     if ENVIRONMENT == "dev" else None,
+    openapi_url="/api/openapi.json" if ENVIRONMENT == "dev" else None,
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── Security headers ─────────────────────────────────────────────────────────
+
+# Extension sets of static file suffixes that are safe to cache aggressively
+_IMMUTABLE_EXTS = {".js", ".css", ".geojson", ".svg", ".png", ".ico", ".woff2"}
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Adds HTTP security headers to every response and long-lived Cache-Control
+    headers to static assets (JS, CSS, GeoJSON) to reduce repeat bandwidth."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+
+        # Prevent MIME-type sniffing (e.g. serving a JS file as HTML)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        # Prevent the app being embedded in iframes (clickjacking)
+        response.headers["X-Frame-Options"] = "DENY"
+        # Limit referrer information sent to third-party CDN resources
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # Basic CSP: allow scripts/styles only from self and the two CDNs used by
+        # the dashboard (Bootstrap from jsdelivr, Leaflet from unpkg).
+        # 'unsafe-inline' is required because the dashboard uses inline onclick
+        # attributes; tightening this would require migrating to event listeners.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self'; "
+            "font-src 'self' https://cdn.jsdelivr.net; "
+            "frame-ancestors 'none';"
+        )
+
+        # Cache static assets for 1 hour; the browser will revalidate after that.
+        # Use a short max-age (not immutable) because app.js/style.css change frequently.
+        path = request.url.path
+        ext = os.path.splitext(path)[1].lower()
+        if path.startswith("/static/") and ext in _IMMUTABLE_EXTS:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+        elif path in ("/", "/favicon.ico"):
+            response.headers["Cache-Control"] = "public, max-age=300"
+
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+# Gzip compress API responses and static files — particularly valuable for the
+# 14 MB countries.geojson, which compresses to ~3 MB.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 app.mount("/static", StaticFiles(directory=DASHBOARD_DIR / "static"), name="static")
 
@@ -138,7 +207,8 @@ def favicon():
 # ── /api/stats ───────────────────────────────────────────────────────────────
 
 @app.get("/api/stats", summary="Global summary statistics")
-def api_stats():
+@limiter.limit("60/minute")
+def api_stats(request: Request):
     with cursor() as cur:
         cur.execute("""
             SELECT
@@ -440,7 +510,8 @@ def api_country_past_programmes(iso3: str):
 # ── /api/map/facilities ───────────────────────────────────────────────────────
 
 @app.get("/api/map/facilities", summary="GeoJSON: all geocoded Form A1 facility-year records")
-def api_map_facilities():
+@limiter.limit("20/minute")  # Large payload — lower cap to limit bandwidth abuse
+def api_map_facilities(request: Request):
     """Returns one feature per geocoded facility-year (all years).
     Client-side year filtering applies to this dataset."""
     with cursor() as cur:
@@ -494,7 +565,8 @@ def api_map_facilities():
 
 
 @app.get("/api/map/defence", summary="GeoJSON: all geocoded Form A2 defence facility records")
-def api_map_defence():
+@limiter.limit("20/minute")
+def api_map_defence(request: Request):
     with cursor() as cur:
         cur.execute("""
             SELECT
@@ -538,7 +610,8 @@ def api_map_defence():
 
 
 @app.get("/api/map/vaccines", summary="GeoJSON: all geocoded Form G vaccine facility records")
-def api_map_vaccines():
+@limiter.limit("20/minute")
+def api_map_vaccines(request: Request):
     with cursor() as cur:
         cur.execute("""
             SELECT DISTINCT ON (vfy.canonical_vaccine_facility_id, vfy.year)
@@ -608,7 +681,8 @@ def api_map_compliance():
 # ── /api/search ───────────────────────────────────────────────────────────────
 
 @app.get("/api/search", summary="Search facilities by name or declared activity/organisms (max 20 results)")
-def api_search(q: str = Query(default="", min_length=2, description="Substring to search in names and activity descriptions")):
+@limiter.limit("60/minute")
+def api_search(request: Request, q: str = Query(default="", min_length=2, description="Substring to search in names and activity descriptions")):
     """Searches facility names, all_names aliases, and the free-text agents_summary
     (declared organisms and research activities) from Form A1 records.
     Returns match_type ('name' or 'activity') and an activity_snippet when the
@@ -772,7 +846,8 @@ def api_map_compliance_form(form: str):
 # ── FEATURE 5: /api/stats/timeline ───────────────────────────────────────────
 
 @app.get("/api/stats/timeline", summary="Global longitudinal trends by year")
-def api_stats_timeline():
+@limiter.limit("30/minute")
+def api_stats_timeline(request: Request):
     """Returns per-year counts of facility-years, BSL-4 facility-years, and submitting countries."""
     with cursor() as cur:
         cur.execute("""
@@ -807,7 +882,8 @@ def api_stats_timeline():
 # ── Notable changes ───────────────────────────────────────────────────────────
 
 @app.get("/api/changes/notable", summary="Notable year-on-year changes at long-established facilities")
-def api_changes_notable(min_years: int = Query(default=3, ge=1, description="Minimum years of prior declarations before a change counts as notable")):
+@limiter.limit("30/minute")
+def api_changes_notable(request: Request, min_years: int = Query(default=3, ge=1, description="Minimum years of prior declarations before a change counts as notable")):
     """
     Finds the most significant year-on-year changes across all Form A1 research facilities:
     - BSL-4 or BSL-3 containment area increases / decreases
@@ -970,7 +1046,8 @@ PATHOGEN_TERMS: list[tuple[str, str]] = [
 
 
 @app.get("/api/pathogens/frequency", summary="Count of unique research facilities per declared organism")
-def api_pathogens_frequency():
+@limiter.limit("30/minute")
+def api_pathogens_frequency(request: Request):
     """Returns a sorted list of pathogen/organism mentions with counts of distinct facilities
     (canonical_facility_id) that have declared work with each organism in Form A1 submissions."""
     if not PATHOGEN_TERMS:
@@ -1162,7 +1239,8 @@ def api_flagged(_key: None = Depends(require_review_key)):
 # ── BSL-4 declared capacity over time ─────────────────────────────────────────
 
 @app.get("/api/stats/bsl4-capacity", summary="Global BSL-4 declared area (m²) per year per country")
-def api_bsl4_capacity():
+@limiter.limit("30/minute")
+def api_bsl4_capacity(request: Request):
     """Returns total declared BSL-4 laboratory area per year per country.
     Only includes year-records with a positive bsl4_area_m2 value.
     Used for the Global BSL-4 Capacity chart in the Trends modal."""
@@ -1190,7 +1268,8 @@ def api_bsl4_capacity():
 # ── Transparency index per country ────────────────────────────────────────────
 
 @app.get("/api/countries/transparency", summary="Composite transparency score per submitting country")
-def api_transparency():
+@limiter.limit("30/minute")
+def api_transparency(request: Request):
     """Composite transparency index (0-100) for each country.
 
     Weighted formula:
