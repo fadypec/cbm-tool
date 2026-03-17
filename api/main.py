@@ -182,10 +182,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # attributes; tightening this would require migrating to event listeners.
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://plausible.io; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cloud.umami.is; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; "
             "img-src 'self' data: https:; "
-            "connect-src 'self' https://plausible.io; "
+            "connect-src 'self' https://cloud.umami.is; "
             "font-src 'self' https://cdn.jsdelivr.net; "
             "frame-ancestors 'none';"
         )
