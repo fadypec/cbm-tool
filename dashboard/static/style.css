@@ -945,6 +945,366 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 }
 #mobile-overlay.show { display: block; }
 
+/* ── Dark theme for filter panel ────────────────────────────────────────── */
+/* Overrides the default white panel to match the dark navbar/sidebar */
+#filter-panel {
+    background: rgba(18, 20, 31, 0.97) !important;
+    border: 1px solid #2a2a3a;
+}
+#fp-header {
+    background: #0e1020 !important;
+    border-bottom-color: #252535 !important;
+}
+.fp-title { color: #c0ccf0 !important; }
+#fp-collapse { color: #6070a0 !important; }
+#fp-collapse:hover { color: #c0ccf0 !important; }
+.fp-section { border-bottom-color: #1e2030 !important; }
+.fp-label { color: #6070a0 !important; }
+.fp-sublabel { color: #404870 !important; }
+.fp-check { color: #b0bcde !important; }
+.fp-bsl-note { color: #e67e22; }
+#year-input {
+    background: #1e2130 !important;
+    border-color: #3a3a5a !important;
+    color: #c0ccf0 !important;
+}
+#year-input:disabled { color: #404870 !important; background: #14161f !important; }
+#year-slider { accent-color: #4a8ad4; }
+.fp-year-range { color: #404870 !important; }
+.fp-play-btn {
+    background: #1e2130 !important;
+    border-color: #3a3a5a !important;
+    color: #b0bcde !important;
+}
+.fp-play-btn:hover:not(:disabled) { background: #252840 !important; }
+.fp-play-btn:disabled { color: #404870 !important; }
+.fp-play-btn.playing { background: #2a1a10 !important; border-color: #8b4a20 !important; color: #e0a070 !important; }
+.fp-btn {
+    background: #1e2130 !important;
+    border-color: #3a3a5a !important;
+    color: #b0bcde !important;
+}
+.fp-btn:hover { background: #252840 !important; }
+.fp-form-select {
+    background: #1e2130 !important;
+    border-color: #3a3a5a !important;
+    color: #b0bcde !important;
+}
+.fp-form-select:focus { border-color: #4a8ad4 !important; }
+.fp-organism-input {
+    background: #1e2130 !important;
+    border-color: #3a3a5a !important;
+    color: #c0ccf0 !important;
+}
+.fp-organism-input::placeholder { color: #404870 !important; }
+.fp-organism-input:focus { border-color: #4a8ad4 !important; }
+.fp-organism-clear {
+    border-color: #3a3a5a !important;
+    color: #6070a0 !important;
+}
+.fp-organism-clear:hover { color: #c0ccf0 !important; border-color: #6070a0 !important; }
+.filter-chip {
+    background: #1e2840 !important;
+    border-color: #3a4a70 !important;
+    color: #a0b0e0 !important;
+}
+.filter-chip-clear { color: #6070a0 !important; }
+.filter-chip-clear:hover { color: #c0ccf0 !important; }
+/* Map filter chips (active filters bar inside filter panel) */
+#map-filter-chips { background: transparent; }
+.map-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: #1e2130;
+    border: 1px solid #3a3a5a;
+    border-radius: 12px;
+    font-size: 10px;
+    color: #8090b0;
+    cursor: default;
+}
+.map-chip-clear {
+    background: none;
+    border: none;
+    color: #6070a0;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+.map-chip-clear:hover { color: #c0ccf0; }
+
+/* ── Dark modal theme ────────────────────────────────────────────────────── */
+.modal-content {
+    background-color: #12141f !important;
+    border: 1px solid #2a2a3a !important;
+    color: #c0ccf0;
+}
+.modal-header {
+    background-color: #0e1020 !important;
+    border-bottom-color: #252535 !important;
+}
+.modal-title { color: #e0e8ff !important; }
+.btn-close {
+    filter: invert(1) brightness(0.7);
+}
+.modal-body { color: #c0ccf0; }
+/* Override Bootstrap defaults for text inside modals */
+.modal-body .text-muted { color: #6070a0 !important; }
+.modal-body .text-danger { color: #e07070 !important; }
+.modal-body small { color: #6070a0; }
+.modal-body strong { color: #e0e8ff; }
+.modal-body code { background: #1e2130; color: #a0c0f0; border-radius: 3px; padding: 1px 5px; }
+/* Entity modal year records */
+.year-record { border-color: #252535 !important; background: #0e1020; }
+.yr-head { color: #e0e8ff !important; }
+.yr-kv dt { color: #6070a0 !important; }
+.yr-kv dd { color: #c0ccf0 !important; }
+/* About modal */
+.about-byline { color: #8090b0 !important; border-bottom-color: #252535 !important; }
+.about-byline a { color: #6090d4 !important; }
+.about-heading { color: #e0e8ff !important; border-bottom-color: #252535 !important; }
+.modal-body p, .modal-body li { color: #a0b0d0; }
+.modal-body a { color: #6090d4; }
+/* Global compliance table inside modal */
+.gt-table thead tr { background: #0e1020 !important; border-bottom-color: #252535 !important; }
+.gt-table th { color: #6070a0 !important; }
+.gt-row { border-bottom-color: #1e2030 !important; }
+.gt-row:hover { background: #1a1e35 !important; }
+.gt-row td { color: #c0ccf0 !important; }
+.gt-rate-none { background: #1e2130 !important; color: #6070a0 !important; }
+/* Trends modal */
+.trends-chart text { fill: #8090b0 !important; }
+.trends-tab { color: #6070a0 !important; }
+.trends-tab.active { color: #e0e8ff !important; border-bottom-color: #4a8ad4 !important; }
+.trends-tab:hover { color: #c0ccf0 !important; }
+#trends-tab-bar { border-bottom-color: #252535 !important; }
+.pathogen-row:hover { background: #1a1e35 !important; }
+.pathogen-label { color: #c0ccf0 !important; }
+.pathogen-bar-wrap { background: #1e2130 !important; }
+.pathogen-count { color: #6070a0 !important; }
+.pathogen-chart-header { color: #6070a0 !important; }
+/* AI query modal */
+.ai-query-input { background: #1e2130 !important; border-color: #3a3a5a !important; color: #c0ccf0 !important; }
+.ai-query-input:focus { border-color: #4a8ad4 !important; }
+.ai-query-rationale { background: #0e1020 !important; border-color: #252535 !important; color: #8090b0 !important; }
+.ai-results-header { color: #8090b0 !important; }
+.ai-results-list { border-color: #252535 !important; }
+.ai-result-item { border-bottom-color: #1e2030 !important; }
+.ai-result-name { color: #e0e8ff !important; }
+.ai-result-meta { color: #6070a0 !important; }
+/* Entity modal tabs */
+.em-tab-bar { border-bottom-color: #252535 !important; }
+.em-tab { color: #6070a0 !important; }
+.em-tab.active { color: #e0e8ff !important; border-bottom-color: #4a8ad4 !important; }
+/* Facility diff */
+.fac-diff-block { border-color: #252535 !important; background: #0e1020; }
+.fac-diff-head { color: #e0e8ff !important; border-bottom-color: #1e2030 !important; }
+.fac-diff-row { border-bottom-color: #1a1c2c !important; }
+.diff-key { color: #6070a0 !important; }
+.diff-val { color: #c0ccf0 !important; }
+.diff-pct { color: #6070a0 !important; }
+/* Notable changes */
+.chg-summary { background: #0e1020 !important; }
+.chg-summary-item { color: #8090b0 !important; }
+.chg-header { color: #6070a0 !important; }
+.chg-row:hover { background: #1a1e35 !important; }
+.chg-facility { color: #e0e8ff !important; }
+.chg-meta { color: #6070a0 !important; }
+.chg-detail { color: #8090b0 !important; }
+.chg-type-icon { color: #6070a0 !important; }
+
+/* ── Hover tooltip on map markers ───────────────────────────────────────── */
+.marker-tooltip {
+    background: rgba(14, 16, 32, 0.97) !important;
+    border: 1px solid #3a3a5a !important;
+    border-radius: 5px;
+    color: #c0ccf0 !important;
+    font-size: 12px;
+    padding: 5px 9px;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    white-space: nowrap;
+}
+.marker-tooltip::before { border-top-color: #3a3a5a !important; }
+/* Leaflet tooltip arrow — override default white */
+.leaflet-tooltip-top.marker-tooltip::before { border-top-color: #3a3a5a !important; }
+.leaflet-tooltip-bottom.marker-tooltip::before { border-bottom-color: #3a3a5a !important; }
+
+/* ── SVG chart tooltip (hover on Trends SVG) ────────────────────────────── */
+.trends-tooltip {
+    position: fixed;
+    display: none;
+    background: rgba(14, 16, 32, 0.97);
+    border: 1px solid #3a3a5a;
+    border-radius: 6px;
+    padding: 7px 11px;
+    font-size: 12px;
+    color: #c0ccf0;
+    pointer-events: none;
+    z-index: 9999;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    line-height: 1.7;
+    min-width: 160px;
+}
+.trends-tooltip strong { color: #e0e8ff; font-size: 13px; }
+/* Highlight dots on SVG chart (placed at data points during hover) */
+.trends-dot { pointer-events: none; }
+
+/* ── Lapsed declarations UI ─────────────────────────────────────────────── */
+.fp-lapsed-legend {
+    display: flex;
+    gap: 12px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #8090b0;
+}
+.fp-lapsed-dot {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    margin-right: 3px;
+    vertical-align: middle;
+    border: 1.5px solid rgba(255,255,255,0.3);
+}
+.fp-lapsed-dot.active  { background: #4a8ad4; }
+.fp-lapsed-dot.lapsed  { background: #888; opacity: 0.7; }
+
+/* ── BSL-4 capacity chart (stacked area / multi-line) ───────────────────── */
+.capacity-chart-header { font-size:11px; color:#6070a0; font-style:italic; margin-bottom:14px; }
+.capacity-country-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    margin-top: 10px;
+    font-size: 11px;
+}
+.cap-leg-item { display: flex; align-items: center; gap: 4px; color: #8090b0; }
+.cap-leg-line { display: inline-block; width: 20px; height: 3px; border-radius: 2px; }
+
+/* ── Country comparison modal ───────────────────────────────────────────── */
+.cmp-selector-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+.cmp-selector-wrap { flex: 1; min-width: 180px; }
+.cmp-selector-label { display: block; font-size: 11px; font-weight: 700; color: #6070a0; letter-spacing: 0.06em; margin-bottom: 5px; }
+.cmp-select {
+    width: 100%;
+    padding: 6px 10px;
+    background: #1e2130;
+    border: 1px solid #3a3a5a;
+    border-radius: 5px;
+    color: #c0ccf0;
+    font-size: 13px;
+}
+.cmp-vs {
+    font-size: 16px;
+    font-weight: 700;
+    color: #4a5280;
+    padding-top: 20px;
+    flex-shrink: 0;
+}
+.cmp-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+@media (max-width: 600px) { .cmp-grid { grid-template-columns: 1fr; } }
+.cmp-col-head {
+    font-size: 15px;
+    font-weight: 700;
+    color: #e0e8ff;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #3a3a5a;
+}
+.cmp-section-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #4a5280;
+    letter-spacing: 0.08em;
+    margin: 14px 0 6px;
+}
+.cmp-stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 3px 0;
+    font-size: 12px;
+    border-bottom: 1px solid #1e2030;
+    gap: 8px;
+}
+.cmp-stat-row:last-child { border-bottom: none; }
+.cmp-stat-key { color: #6070a0; }
+.cmp-stat-val { color: #c0ccf0; font-weight: 500; text-align: right; }
+.cmp-stat-val.highlight { color: #4a8ad4; font-weight: 700; }
+.cmp-organisms {
+    font-size: 11px;
+    color: #8090b0;
+    line-height: 1.6;
+    margin-top: 4px;
+}
+.cmp-compliance-mini { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 4px; }
+.cmp-yr-dot {
+    width: 10px; height: 10px;
+    border-radius: 2px;
+    display: inline-block;
+    cursor: default;
+}
+.cmp-export-btn {
+    display: inline-block;
+    margin-top: 16px;
+    padding: 6px 14px;
+    background: #1e2130;
+    border: 1px solid #3a3a5a;
+    border-radius: 5px;
+    font-size: 12px;
+    color: #b0bcde;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.cmp-export-btn:hover { background: #252840; }
+
+/* ── Facility biography timeline ─────────────────────────────────────────── */
+.timeline-wrap { overflow-x: auto; padding-bottom: 8px; }
+.timeline-svg { display: block; }
+.tl-year-label { font-size: 10px; fill: #6070a0; }
+.tl-event-label { font-size: 9px; fill: #8090b0; }
+.tl-bar { rx: 3; }
+.tl-tooltip {
+    position: fixed;
+    display: none;
+    background: rgba(14,16,32,0.97);
+    border: 1px solid #3a3a5a;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: #c0ccf0;
+    pointer-events: none;
+    z-index: 9999;
+    max-width: 220px;
+    line-height: 1.5;
+}
+
+/* ── Transparency badge in country list ─────────────────────────────────── */
+.transp-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+.transp-high   { background: #0a3a1a; color: #50c070; }
+.transp-medium { background: #2a2a10; color: #b0a040; }
+.transp-low    { background: #2a1010; color: #c06040; }
+
 /* ── Mobile responsive ──────────────────────────────────────────────────── */
 @media (max-width: 767px) {
 

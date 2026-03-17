@@ -1182,3 +1182,97 @@ def api_country_defence_v2(iso3: str):
         records = [dict(r) for r in cur.fetchall()]
 
     return _json({"programmes": programmes, "entities": entities, "records": records})
+
+
+# ── BSL-4 declared capacity over time ─────────────────────────────────────────
+
+@app.get("/api/stats/bsl4-capacity", summary="Global BSL-4 declared area (m²) per year per country")
+def api_bsl4_capacity():
+    """Returns total declared BSL-4 laboratory area per year per country.
+    Only includes year-records with a positive bsl4_area_m2 value.
+    Used for the Global BSL-4 Capacity chart in the Trends modal."""
+    with cursor() as cur:
+        cur.execute("""
+            SELECT
+                fy.year,
+                fy.country_iso3,
+                (SELECT d.country_name FROM documents d
+                 WHERE  d.country_iso3 = fy.country_iso3
+                   AND  d.country_name IS NOT NULL LIMIT 1) AS country_name,
+                SUM(fy.bsl4_area_m2)::float                 AS total_bsl4_area_m2,
+                COUNT(*) FILTER (WHERE fy.has_bsl4)         AS bsl4_facility_count
+            FROM facility_years fy
+            WHERE fy.bsl4_area_m2 IS NOT NULL
+              AND fy.bsl4_area_m2 > 0
+              AND fy.year IS NOT NULL
+              AND fy.year < EXTRACT(YEAR FROM CURRENT_DATE)::int
+            GROUP BY fy.year, fy.country_iso3
+            ORDER BY fy.year, SUM(fy.bsl4_area_m2) DESC
+        """)
+        return _json([dict(r) for r in cur.fetchall()])
+
+
+# ── Transparency index per country ────────────────────────────────────────────
+
+@app.get("/api/countries/transparency", summary="Composite transparency score per submitting country")
+def api_transparency():
+    """Composite transparency index (0-100) for each country.
+
+    Weighted formula:
+    - Regularity (40%): actual submissions / possible annual slots since first year
+    - Substantive A1 rate (40%): share of submissions with substantive Form A1 content
+    - Recency (20%): 1.0 if submitted within last 3 years, 0.5 if 4-6 years, 0.1 otherwise
+
+    Distinguishes procedural compliance ("nothing to declare" every year) from
+    substantive transparency (detailed facility declarations with consistent reporting).
+    """
+    current_year = 2026  # anchored to dataset; update when new data arrives
+    with cursor() as cur:
+        cur.execute("""
+            WITH submission_stats AS (
+                SELECT
+                    d.country_iso3,
+                    MAX(d.country_name)  AS country_name,
+                    COUNT(DISTINCT d.id) AS submission_count,
+                    MIN(d.year)          AS first_year,
+                    MAX(d.year)          AS latest_year,
+                    ROUND(
+                        COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.id END)::numeric
+                        / NULLIF(COUNT(DISTINCT d.id), 0), 3
+                    ) AS a1_rate
+                FROM documents d
+                LEFT JOIN form_compliance fc ON fc.document_id = d.id AND fc.form = 'A1'
+                WHERE NOT d.is_amendment
+                GROUP BY d.country_iso3
+            )
+            SELECT
+                country_iso3,
+                country_name,
+                submission_count,
+                first_year,
+                latest_year,
+                a1_rate,
+                LEAST(1.0,
+                    submission_count::numeric /
+                    NULLIF((latest_year - first_year + 1)::numeric, 0)
+                ) AS regularity_score,
+                CASE
+                    WHEN latest_year >= %s - 2 THEN 1.0
+                    WHEN latest_year >= %s - 5 THEN 0.5
+                    ELSE 0.1
+                END AS recency_score
+            FROM submission_stats
+            ORDER BY country_name
+        """, (current_year, current_year))
+        rows = [dict(r) for r in cur.fetchall()]
+
+    # Final weighted composite computed in Python (cleaner than SQL arithmetic)
+    for r in rows:
+        regularity = float(r.get("regularity_score") or 0)
+        a1_rate    = float(r.get("a1_rate")          or 0)
+        recency    = float(r.get("recency_score")    or 0)
+        r["transparency_score"] = round(
+            (regularity * 0.40 + a1_rate * 0.40 + recency * 0.20) * 100, 1
+        )
+
+    return _json(rows)

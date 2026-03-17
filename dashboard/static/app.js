@@ -20,6 +20,9 @@ const STATE = {
     hideLow:    false,
     organism:   '',     // organism text filter (A1 only)
     aiFilterIds: null,  // Set of canonical_facility_ids from AI query (null = no filter)
+    // Lapsed declarations: show facilities that haven't appeared in recent CBMs
+    showLapsed:       false,
+    lapsedThreshold:  3,   // years before country's latest submission counts as lapsed
 };
 
 // Raw GeoJSON data keyed by layer
@@ -45,6 +48,13 @@ let _playInterval   = null; // year animation interval
 let _hashTimer      = null; // debounce for history.replaceState
 let _tableSort      = { col: 'submission_count', dir: 'desc' };
 
+// Lapsed declarations: max year seen per facility id (across all DATA.A1 records)
+const LATEST_FACILITY_YEAR = {};  // canonical_facility_id → max year in dataset
+// Set of facility ids currently classified as "lapsed" — recomputed in applyFilters()
+let _lapsedIds = new Set();
+// Transparency scores fetched from /api/countries/transparency
+let _transparencyMap = {};  // iso3 → transparency_score
+
 // ── Bootstrap ──────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -55,19 +65,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     restoreFromHash();
 
     try {
-        const [stats, countries, a1, a2, vaccines, compliance] = await Promise.all([
+        const [stats, countries, a1, a2, vaccines, compliance, transparency] = await Promise.all([
             api('/api/stats'),
             api('/api/countries'),
             api('/api/map/facilities'),
             api('/api/map/defence'),
             api('/api/map/vaccines'),
             api('/api/map/compliance'),
+            // Transparency index loaded in parallel; non-critical so errors are swallowed below
+            api('/api/countries/transparency').catch(() => []),
         ]);
 
         renderStats(stats);
         initYearSlider(stats.year_min, stats.year_max);
 
         compliance.forEach(c => { complianceRates[c.country_iso3] = c; });
+
+        // Build transparency lookup for use in country list and global table
+        transparency.forEach(t => { _transparencyMap[t.country_iso3] = t.transparency_score; });
+
         _countriesData = countries;
         renderCountryList(countries);
 
@@ -76,6 +92,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         DATA.G  = vaccines;
 
         computeLatestYears();
+        computeLatestFacilityYears();  // for lapsed declarations feature
         applyFilters();
         addLegend();
         loadChoropleth();
@@ -200,6 +217,13 @@ function markerOptions(layer, feature) {
     // bubblingMouseEvents: false ensures a marker click never falls through to the
     // choropleth country layer underneath, preventing accidental country navigation.
     const base = { color: '#fff', weight: 1.5, opacity: 1, fillOpacity: 0.85, bubblingMouseEvents: false };
+
+    // Lapsed facility: grey, reduced opacity, dashed border
+    if (layer === 'A1' && STATE.showLapsed && _lapsedIds.has(p.id)) {
+        return { ...base, radius: 7, fillColor: '#888888', fillOpacity: 0.45,
+                 color: '#aaa', weight: 1, dashArray: '3,3' };
+    }
+
     if (layer === 'A1') return { ...base, radius: 8, fillColor: bslColor(p.containment) };
     if (layer === 'A2') return { ...base, radius: 7, fillColor: '#8b1a1a' };
     return                       { ...base, radius: 7, fillColor: '#0a7a6a' };
@@ -219,15 +243,81 @@ function computeLatestYears() {
     }
 }
 
+// Pre-compute latest year seen per canonical_facility_id across all A1 records.
+// Used by the lapsed declarations view to find a facility's last known appearance.
+function computeLatestFacilityYears() {
+    if (!DATA.A1) return;
+    for (const f of DATA.A1.features) {
+        const id   = f.properties.id;
+        const year = f.properties.year;
+        if (!LATEST_FACILITY_YEAR[id] || year > LATEST_FACILITY_YEAR[id]) {
+            LATEST_FACILITY_YEAR[id] = year;
+        }
+    }
+}
+
+// Return a Set of facility ids that are "lapsed": their last known declaration was
+// STATE.lapsedThreshold or more years before the country's most recent submission.
+function computeLapsedIds() {
+    const lapsed = new Set();
+    if (!DATA.A1) return lapsed;
+    const facilityIds = new Set(DATA.A1.features.map(f => f.properties.id));
+    facilityIds.forEach(fid => {
+        const facilityLastYear = LATEST_FACILITY_YEAR[fid];
+        if (!facilityLastYear) return;
+        // Find the country for this facility (any feature with this id)
+        const sample = DATA.A1.features.find(f => f.properties.id === fid);
+        if (!sample) return;
+        const countryIso3     = sample.properties.country_iso3;
+        const countryLastYear = LATEST_YEAR.A1?.[countryIso3] ?? facilityLastYear;
+        if ((countryLastYear - facilityLastYear) >= STATE.lapsedThreshold) {
+            lapsed.add(fid);
+        }
+    });
+    return lapsed;
+}
+
+// ── Lapsed filter UI handlers ───────────────────────────────────────────────
+
+function onLapsedToggle() {
+    STATE.showLapsed = document.getElementById('lapsed-toggle').checked;
+    const row = document.getElementById('lapsed-threshold-row');
+    if (row) row.style.display = STATE.showLapsed ? 'block' : 'none';
+    // Lapsed mode ignores the year filter (always shows latest per facility)
+    if (STATE.showLapsed && STATE.year !== null) {
+        // Force to "all years" mode
+        const allYears = document.getElementById('all-years');
+        if (allYears) allYears.checked = true;
+        onAllYearsToggle();
+        return; // onAllYearsToggle already calls applyFilters
+    }
+    applyFilters();
+}
+
+function onLapsedThresholdChange(val) {
+    const n = parseInt(val);
+    if (!isNaN(n) && n >= 1) {
+        STATE.lapsedThreshold = n;
+        applyFilters();
+    }
+}
+
 function matchesFilter(layer, feature) {
     const p = feature.properties;
-    if (STATE.year !== null) {
+
+    if (layer === 'A1' && STATE.showLapsed && STATE.year === null) {
+        // Lapsed mode: show only the latest record per facility (not per country)
+        // so each facility gets exactly one marker, styled lapsed if it went dark
+        const facilityLatest = LATEST_FACILITY_YEAR[p.id];
+        if (facilityLatest && p.year !== facilityLatest) return false;
+    } else if (STATE.year !== null) {
         if (p.year !== STATE.year) return false;
     } else {
         // Default: show only each country's latest submission year
         const latest = LATEST_YEAR[layer]?.[p.country_iso3];
         if (latest && p.year !== latest) return false;
     }
+
     if (STATE.hideLow && p.geocode_conf === 'low') return false;
     if (layer === 'A1') {
         if (!STATE.bsl[normalizeBsl(p.containment)]) return false;
@@ -241,6 +331,13 @@ function matchesFilter(layer, feature) {
 }
 
 function applyFilters() {
+    // Recompute lapsed set before any layer is processed
+    if (STATE.showLapsed && DATA.A1) {
+        _lapsedIds = computeLapsedIds();
+    } else {
+        _lapsedIds = new Set();
+    }
+
     for (const layer of ['A1', 'A2', 'G']) {
         CLUSTERS[layer].clearLayers();
         if (!STATE.layers[layer] || !DATA[layer]) continue;
@@ -254,6 +351,15 @@ function applyFilters() {
                 pointToLayer: (f, ll) => L.circleMarker(ll, markerOptions(layer, f)),
                 onEachFeature: (f, lyr) => {
                     lyr.bindPopup(buildPopup(layer, f), { maxWidth: 280 });
+                    // Hover tooltip: brief summary before committing to a click
+                    lyr.bindTooltip(buildHoverTooltip(layer, f), {
+                        permanent:   false,
+                        direction:   'top',
+                        sticky:      false,
+                        offset:      [0, -6],
+                        opacity:     1,
+                        className:   'marker-tooltip',
+                    });
                 },
             }
         ).getLayers();
@@ -261,7 +367,27 @@ function applyFilters() {
         CLUSTERS[layer].addLayers(leafletLayers);
     }
 
+    updateActiveFiltersBar();
     updateHash();
+}
+
+// Build a compact hover tooltip (shown on desktop mouse-over before click)
+function buildHoverTooltip(layer, feature) {
+    const p = feature.properties;
+    const name = p.name || '[Unnamed facility]';
+    const yearStr = p.year ? ` · ${p.year}` : '';
+    if (layer === 'A1') {
+        const bsl = p.containment || 'Unknown containment';
+        const color = bslColor(p.containment);
+        return `<strong>${esc(name)}</strong>` +
+               `<div style="color:${color};font-size:11px">${esc(bsl)}${yearStr}</div>`;
+    }
+    if (layer === 'A2') {
+        return `<strong>${esc(name)}</strong>` +
+               `<div style="color:#c06060;font-size:11px">Defence facility${yearStr}</div>`;
+    }
+    return `<strong>${esc(name)}</strong>` +
+           `<div style="color:#60c0b0;font-size:11px">Vaccine facility${yearStr}</div>`;
 }
 
 function buildPopup(layer, feature) {
@@ -339,6 +465,7 @@ function onFilterChange() {
 
     applyFilters();
     updateStatsBar();
+    updateActiveFiltersBar();
 }
 
 // ── Organism filter ─────────────────────────────────────────────────────────
@@ -382,6 +509,7 @@ function clearAIFilter() {
 }
 
 function updateActiveFilterChips() {
+    // Legacy AI filter chip inside filter panel body (kept for backward compat)
     const el = document.getElementById('active-filter-chips');
     if (!el) return;
     if (STATE.aiFilterIds) {
@@ -394,6 +522,8 @@ function updateActiveFilterChips() {
         el.innerHTML = '';
         el.style.display = 'none';
     }
+    // Also update the comprehensive active filters bar
+    updateActiveFiltersBar();
 }
 
 function onAllYearsToggle() {
@@ -856,19 +986,28 @@ function showPanel(name) {
 
 function renderCountryList(countries) {
     document.getElementById('country-count').textContent = `${countries.length}`;
-    const html = countries.map(c => `
+    const html = countries.map(c => {
+        const ts   = _transparencyMap[c.country_iso3];
+        const tBadge = ts != null ? transparencyBadge(ts) : '';
+        return `
         <div class="country-item" data-iso3="${c.country_iso3}"
              onclick="selectCountry('${c.country_iso3}')">
-            <div class="country-name">${esc(c.country_name || c.country_iso3)}</div>
+            <div class="country-name">${esc(c.country_name || c.country_iso3)}${tBadge}</div>
             <div class="country-meta">
                 ${c.submission_count} submission${c.submission_count !== 1 ? 's' : ''}
                 &nbsp;·&nbsp; ${c.facility_count} facilit${c.facility_count !== 1 ? 'ies' : 'y'}
                 ${c.bsl4_count ? `&nbsp;·&nbsp; <span style="color:#c0392b">${c.bsl4_count} BSL-4</span>` : ''}
             </div>
-        </div>`
-    ).join('');
+        </div>`;
+    }).join('');
     document.getElementById('country-list').innerHTML =
         html || '<div class="side-placeholder">No data</div>';
+}
+
+// Returns an HTML badge for a 0–100 transparency score
+function transparencyBadge(score) {
+    const cls  = score >= 65 ? 'transp-high' : score >= 35 ? 'transp-medium' : 'transp-low';
+    return `<span class="transp-badge ${cls}" title="Transparency index: ${score}/100">${Math.round(score)}</span>`;
 }
 
 // ── Country detail ─────────────────────────────────────────────────────────
@@ -913,13 +1052,18 @@ function renderCountryDetail(data) {
     document.getElementById('detail-content').style.display = 'flex';
     document.getElementById('detail-title').textContent = data.country_name;
 
-    // Subtitle: submission count + A1 rate
-    const cr = complianceRates[data.country_iso3 || _currentIso3];
+    // Subtitle: submission count + A1 rate + transparency score + report export link
+    const cr  = complianceRates[data.country_iso3 || _currentIso3];
+    const ts  = _transparencyMap[data.country_iso3 || _currentIso3];
     const sub = document.getElementById('detail-subtitle');
     if (sub && cr) {
-        const rate = cr.a1_rate != null ? ` · A1 rate ${Math.round(cr.a1_rate * 100)}%` : '';
-        sub.textContent = `${cr.submission_count} submission${cr.submission_count !== 1 ? 's' : ''}${rate}`;
-    } else if (sub) { sub.textContent = ''; }
+        const rate  = cr.a1_rate != null ? ` · A1 ${Math.round(cr.a1_rate * 100)}%` : '';
+        const tBadge = ts != null ? ` · <span style="font-size:10px">${transparencyBadge(ts)}</span>` : '';
+        const exportBtn = `<button onclick="exportCountryReport('${data.country_iso3 || _currentIso3}')"
+            style="background:none;border:none;color:#4a5280;font-size:10px;cursor:pointer;padding:0 0 0 6px"
+            title="Export report card">↗ report</button>`;
+        sub.innerHTML = `${cr.submission_count} sub${cr.submission_count !== 1 ? 's' : ''}${rate}${tBadge}${exportBtn}`;
+    } else if (sub) { sub.innerHTML = ''; }
 
     renderComplianceGrid(data.compliance);
     renderFacilityList(data.facilities);
@@ -1332,18 +1476,21 @@ function renderEntityModal(data) {
             </div>`;
     }).join('') || '<div class="text-muted">No year records found.</div>';
 
-    // Build changes panel (only show tab if ≥2 records)
-    const changesHtml = renderFacilityChangesTab(yr);
+    // Build changes and timeline panels (only show tabs if ≥2 records)
+    const changesHtml  = renderFacilityChangesTab(yr);
+    const timelineHtml = renderTimelineTab(yr);
     const showChangeTab = yr.length >= 2;
 
     const tabBar = `<div class="em-tab-bar">
-        <button class="em-tab active" data-tab="records" onclick="switchEntityTab(this,'records')">Year records (${yr.length})</button>
-        ${showChangeTab ? `<button class="em-tab" data-tab="changes" onclick="switchEntityTab(this,'changes')">Changes</button>` : ''}
+        <button class="em-tab active" data-tab="records"  onclick="switchEntityTab(this,'records')">Year records (${yr.length})</button>
+        ${showChangeTab ? `<button class="em-tab" data-tab="changes"  onclick="switchEntityTab(this,'changes')">Changes</button>` : ''}
+        ${showChangeTab ? `<button class="em-tab" data-tab="timeline" onclick="switchEntityTab(this,'timeline')">Timeline</button>` : ''}
     </div>`;
 
     const html = header + tabBar +
         `<div id="em-records-panel">${recordsHtml}</div>` +
-        (showChangeTab ? `<div id="em-changes-panel" style="display:none">${changesHtml}</div>` : '');
+        (showChangeTab ? `<div id="em-changes-panel"  style="display:none">${changesHtml}</div>`  : '') +
+        (showChangeTab ? `<div id="em-timeline-panel" style="display:none">${timelineHtml}</div>` : '');
 
     document.getElementById('modal-body').innerHTML = html;
 }
@@ -1353,7 +1500,7 @@ function switchEntityTab(btn, tab) {
         b.classList.toggle('active', b.dataset.tab === tab)
     );
     const body = document.getElementById('modal-body');
-    const panels = { records: 'em-records-panel', changes: 'em-changes-panel' };
+    const panels = { records: 'em-records-panel', changes: 'em-changes-panel', timeline: 'em-timeline-panel' };
     Object.entries(panels).forEach(([key, id]) => {
         const el = body.querySelector(`#${id}`);
         if (el) el.style.display = key === tab ? '' : 'none';
@@ -1597,6 +1744,7 @@ function renderGlobalTable(rows, sortCol, sortDir) {
 let _trendsChartLoaded = false;
 let _trendsPathogens   = null;  // null = not yet fetched
 let _trendsChanges     = null;  // null = not yet fetched
+let _trendsCapacity    = null;  // null = not yet fetched
 
 async function showTrends() {
     const modalEl = document.getElementById('trends-modal');
@@ -1605,17 +1753,20 @@ async function showTrends() {
 
     document.getElementById('trends-body').innerHTML =
         `<div id="trends-tab-bar">
-            <button class="trends-tab active" data-tab="chart"     onclick="switchTrendsTab('chart')">📈 Trends</button>
-            <button class="trends-tab"         data-tab="pathogens" onclick="switchTrendsTab('pathogens')">🦠 Pathogens</button>
-            <button class="trends-tab"         data-tab="changes"   onclick="switchTrendsTab('changes')">🔄 Changes</button>
+            <button class="trends-tab active" data-tab="chart"    onclick="switchTrendsTab('chart')">📈 Trends</button>
+            <button class="trends-tab" data-tab="pathogens"        onclick="switchTrendsTab('pathogens')">🦠 Pathogens</button>
+            <button class="trends-tab" data-tab="changes"          onclick="switchTrendsTab('changes')">🔄 Changes</button>
+            <button class="trends-tab" data-tab="capacity"         onclick="switchTrendsTab('capacity')">🏗 BSL-4 Capacity</button>
          </div>
          <div id="trends-chart-panel"><div class="text-center py-4 text-muted">Loading…</div></div>
-         <div id="trends-pathogen-panel" style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>
-         <div id="trends-changes-panel" style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>`;
+         <div id="trends-pathogen-panel"  style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>
+         <div id="trends-changes-panel"   style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>
+         <div id="trends-capacity-panel"  style="display:none"><div class="text-center py-4 text-muted">Loading…</div></div>`;
 
     _trendsChartLoaded = false;
     _trendsPathogens   = null;
     _trendsChanges     = null;
+    _trendsCapacity    = null;
     modal.show();
     loadTrendsChart();
 }
@@ -1624,18 +1775,23 @@ function switchTrendsTab(tab) {
     document.querySelectorAll('.trends-tab').forEach(b =>
         b.classList.toggle('active', b.dataset.tab === tab)
     );
-    document.getElementById('trends-chart-panel').style.display    = tab === 'chart'     ? '' : 'none';
-    document.getElementById('trends-pathogen-panel').style.display = tab === 'pathogens' ? '' : 'none';
-    document.getElementById('trends-changes-panel').style.display  = tab === 'changes'   ? '' : 'none';
+    document.getElementById('trends-chart-panel').style.display    = tab === 'chart'    ? '' : 'none';
+    document.getElementById('trends-pathogen-panel').style.display = tab === 'pathogens'? '' : 'none';
+    document.getElementById('trends-changes-panel').style.display  = tab === 'changes'  ? '' : 'none';
+    document.getElementById('trends-capacity-panel').style.display = tab === 'capacity' ? '' : 'none';
     if (tab === 'pathogens' && !_trendsPathogens) loadPathogens();
     if (tab === 'changes'   && !_trendsChanges)   loadNotableChanges();
+    if (tab === 'capacity'  && !_trendsCapacity)  loadBsl4Capacity();
 }
 
 async function loadTrendsChart() {
     try {
         const d = await api('/api/stats/timeline');
-        document.getElementById('trends-chart-panel').innerHTML = renderTrendsChart(d);
+        const panel = document.getElementById('trends-chart-panel');
+        panel.innerHTML = renderTrendsChart(d);
         _trendsChartLoaded = true;
+        // Set up interactive hover tooltips on the SVG after insertion
+        setupTrendsChartHover(d, panel);
     } catch (e) {
         document.getElementById('trends-chart-panel').innerHTML =
             '<div class="text-danger">Failed to load timeline data.</div>';
@@ -2063,6 +2219,574 @@ function exportAIResults(facilities) {
     a.download = 'cbm-ai-results.csv';
     a.click();
     URL.revokeObjectURL(a.href);
+}
+
+// ── Active filter chips bar (inside filter panel, below actions) ─────────────
+
+// Shows dismissible chips for every non-default filter that is currently active.
+function updateActiveFiltersBar() {
+    const el = document.getElementById('map-filter-chips');
+    if (!el) return;
+
+    const chips = [];
+
+    if (STATE.organism) {
+        chips.push(`<span class="map-chip">🔬 ${esc(STATE.organism)}
+            <button class="map-chip-clear" onclick="clearOrganismFilter()" title="Clear">×</button></span>`);
+    }
+    if (STATE.aiFilterIds) {
+        const n = STATE.aiFilterIds.size;
+        chips.push(`<span class="map-chip">🤖 AI: ${n} facilit${n !== 1 ? 'ies' : 'y'}
+            <button class="map-chip-clear" onclick="clearAIFilter()" title="Clear">×</button></span>`);
+    }
+    if (STATE.showLapsed) {
+        chips.push(`<span class="map-chip">⏳ Lapsed ≥${STATE.lapsedThreshold}y
+            <button class="map-chip-clear" onclick="document.getElementById('lapsed-toggle').checked=false;onLapsedToggle()" title="Clear">×</button></span>`);
+    }
+    if (STATE.year !== null) {
+        chips.push(`<span class="map-chip">📅 Year: ${STATE.year}
+            <button class="map-chip-clear" onclick="document.getElementById('all-years').checked=true;onAllYearsToggle()" title="Clear">×</button></span>`);
+    }
+    const bslAll = Object.values(STATE.bsl).every(Boolean);
+    if (!bslAll) {
+        const active = Object.keys(STATE.bsl).filter(k => STATE.bsl[k]);
+        chips.push(`<span class="map-chip">🔒 BSL: ${active.join(', ')}</span>`);
+    }
+    if (STATE.hideLow) {
+        chips.push(`<span class="map-chip">📍 High/med geocode only
+            <button class="map-chip-clear" onclick="document.getElementById('hide-low').checked=false;onFilterChange()" title="Clear">×</button></span>`);
+    }
+
+    if (chips.length) {
+        el.innerHTML = chips.join('');
+        el.style.display = 'flex';
+    } else {
+        el.innerHTML = '';
+        el.style.display = 'none';
+    }
+}
+
+// ── Interactive chart tooltip (hover over Trends SVG) ────────────────────────
+
+/**
+ * Attaches mousemove/mouseleave handlers to the SVG trend chart.
+ * Creates a floating tooltip div showing exact values for the nearest year.
+ * @param {Object} d   — data from /api/stats/timeline
+ * @param {Element} container — DOM element containing the SVG
+ */
+function setupTrendsChartHover(d, container) {
+    const svg = container.querySelector('svg.trends-chart');
+    if (!svg || !d || !d.years || !d.years.length) return;
+
+    // Reuse or create a singleton tooltip div
+    let tip = document.getElementById('trends-tooltip');
+    if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'trends-tooltip';
+        tip.className = 'trends-tooltip';
+        document.body.appendChild(tip);
+    }
+
+    const CHART_W = 580;
+    const PAD_LEFT = 50, PAD_RIGHT = 20;
+    const innerW = CHART_W - PAD_LEFT - PAD_RIGHT;
+    const minYear = d.years[0], maxYear = d.years[d.years.length - 1];
+    const yearRange = maxYear - minYear || 1;
+
+    const series = [
+        { key: 'a1_facility_years',    label: 'Research facility-years', color: '#4a8ad4' },
+        { key: 'bsl4_facility_years',  label: 'BSL-4 facility-years',    color: '#c0392b' },
+        { key: 'submitting_countries', label: 'Submitting countries',     color: '#27ae60' },
+    ];
+
+    svg.addEventListener('mousemove', e => {
+        const rect  = svg.getBoundingClientRect();
+        const scale = rect.width / CHART_W;  // viewBox to rendered scale
+        const relX  = (e.clientX - rect.left) / scale;
+
+        // Map pixel X back to a year
+        const rawYear = minYear + ((relX - PAD_LEFT) / innerW) * yearRange;
+        const clampedYear = Math.round(rawYear);
+
+        // Find the nearest actual year in the dataset
+        let nearestIdx = -1, nearestDist = Infinity;
+        d.years.forEach((y, i) => {
+            const dist = Math.abs(y - clampedYear);
+            if (dist < nearestDist) { nearestDist = dist; nearestIdx = i; }
+        });
+
+        if (nearestIdx === -1 || nearestDist > 2 || relX < PAD_LEFT || relX > PAD_LEFT + innerW) {
+            tip.style.display = 'none';
+            return;
+        }
+
+        const yr = d.years[nearestIdx];
+        const lines = series
+            .map(s => {
+                const v = (d[s.key] || [])[nearestIdx];
+                if (v == null) return null;
+                return `<span style="color:${s.color}">■</span> ${s.label}: <strong>${v.toLocaleString()}</strong>`;
+            })
+            .filter(Boolean)
+            .join('<br>');
+
+        tip.innerHTML = `<strong>${yr}</strong><br>${lines}`;
+        tip.style.display = 'block';
+        tip.style.left = (e.clientX + 14) + 'px';
+        tip.style.top  = (e.clientY - 14) + 'px';
+    });
+
+    svg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+}
+
+// ── BSL-4 capacity chart ─────────────────────────────────────────────────────
+
+let _trendsCapacityData = null;  // cached raw rows
+
+async function loadBsl4Capacity() {
+    const panel = document.getElementById('trends-capacity-panel');
+    if (!panel) return;
+    try {
+        const data = await api('/api/stats/bsl4-capacity');
+        _trendsCapacity = data;
+        renderBsl4CapacityChart(data, panel);
+    } catch (e) {
+        panel.innerHTML = '<div class="text-danger">Failed to load BSL-4 capacity data.</div>';
+    }
+}
+
+/**
+ * Renders a multi-line SVG chart of declared BSL-4 area (m²) per year per country.
+ * Top-N countries are shown individually; the rest are aggregated as "Other".
+ */
+function renderBsl4CapacityChart(rows, container) {
+    if (!rows || !rows.length) {
+        container.innerHTML = '<div class="text-muted text-center py-4">No BSL-4 area data in the database.</div>';
+        return;
+    }
+
+    // Build year × country matrix
+    const years = [...new Set(rows.map(r => r.year))].sort((a, b) => a - b);
+    const countryTotals = {};
+    rows.forEach(r => {
+        countryTotals[r.country_iso3] = (countryTotals[r.country_iso3] || 0) + (r.total_bsl4_area_m2 || 0);
+    });
+
+    // Show top 8 countries individually; rest summed as "Other"
+    const TOP_N = 8;
+    const sorted = Object.entries(countryTotals).sort((a, b) => b[1] - a[1]);
+    const topCountries = sorted.slice(0, TOP_N).map(([iso3]) => iso3);
+
+    // Lookup: year → iso3 → area
+    const lookup = {};
+    rows.forEach(r => {
+        if (!lookup[r.year]) lookup[r.year] = {};
+        lookup[r.year][r.country_iso3] = r.total_bsl4_area_m2 || 0;
+    });
+
+    // Country name lookup
+    const nameMap = {};
+    rows.forEach(r => { nameMap[r.country_iso3] = r.country_name || r.country_iso3; });
+
+    // Build series: one per top country + one "Other"
+    const PALETTE = ['#c0392b','#2471a3','#27ae60','#e67e22','#8e44ad','#17a589','#f39c12','#5d6d7e'];
+    const series = topCountries.map((iso3, i) => ({
+        iso3, label: nameMap[iso3] || iso3, color: PALETTE[i % PALETTE.length],
+        values: years.map(y => lookup[y]?.[iso3] || 0),
+    }));
+
+    // "Other" series
+    const otherValues = years.map(y => {
+        let s = 0;
+        Object.keys(lookup[y] || {}).forEach(iso3 => {
+            if (!topCountries.includes(iso3)) s += lookup[y][iso3] || 0;
+        });
+        return s;
+    });
+    if (otherValues.some(v => v > 0)) {
+        series.push({ iso3: 'OTHER', label: 'Other countries', color: '#888', values: otherValues });
+    }
+
+    const W = 580, H = 260;
+    const pad = { top: 20, right: 20, bottom: 40, left: 60 };
+    const innerW = W - pad.left - pad.right;
+    const innerH = H - pad.top - pad.bottom;
+
+    const minYear = years[0], maxYear = years[years.length - 1];
+    const yearRange = maxYear - minYear || 1;
+
+    const maxVal = Math.max(...series.flatMap(s => s.values), 1);
+    const xScale = y => pad.left + ((y - minYear) / yearRange) * innerW;
+    const yScale = v => pad.top  + (1 - v / maxVal) * innerH;
+
+    // Build polylines
+    const polylines = series.map(s =>
+        `<polyline points="${years.map((y, i) => `${xScale(y).toFixed(1)},${yScale(s.values[i]).toFixed(1)}`).join(' ')}"
+            fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>`
+    ).join('');
+
+    // Axes
+    const axes = `<line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${pad.top+innerH+1}" stroke="#333"/>
+        <line x1="${pad.left}" y1="${pad.top+innerH}" x2="${pad.left+innerW}" y2="${pad.top+innerH}" stroke="#333"/>`;
+
+    const xTicks = years.filter(y => y % 5 === 0).map(y =>
+        `<text x="${xScale(y).toFixed(1)}" y="${pad.top+innerH+16}" text-anchor="middle" font-size="10" fill="#8090b0">${y}</text>`
+    ).join('');
+
+    const ySteps = 4;
+    const yTicks = Array.from({length: ySteps + 1}, (_, i) => {
+        const v = Math.round((maxVal / ySteps) * i);
+        const y = yScale(v).toFixed(1);
+        return `<text x="${pad.left-6}" y="${(+y+3).toFixed(1)}" text-anchor="end" font-size="10" fill="#8090b0">${v >= 1000 ? (v/1000).toFixed(0)+'k' : v}</text>
+                <line x1="${pad.left-3}" y1="${y}" x2="${pad.left}" y2="${y}" stroke="#555"/>`;
+    }).join('');
+
+    const svg = `<svg class="trends-chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+        ${axes}${xTicks}${yTicks}${polylines}
+        <text x="${pad.left-38}" y="${pad.top+innerH/2}" text-anchor="middle" font-size="9" fill="#6070a0" transform="rotate(-90,${pad.left-38},${pad.top+innerH/2})">m² declared</text>
+    </svg>`;
+
+    const legend = `<div class="capacity-country-legend">
+        ${series.map(s =>
+            `<div class="cap-leg-item"><span class="cap-leg-line" style="background:${s.color}"></span>${esc(s.label)}</div>`
+        ).join('')}
+    </div>`;
+
+    container.innerHTML =
+        `<p class="capacity-chart-header">Total declared BSL-4 laboratory area (m²) per country per year. Only includes submissions reporting a positive BSL-4 area figure.</p>` +
+        svg + legend;
+}
+
+// ── Country comparison ────────────────────────────────────────────────────────
+
+let _compareModal = null;
+
+function showCompare() {
+    const modalEl = document.getElementById('compare-modal');
+    if (!modalEl) return;
+
+    // Populate selects with all known countries
+    const selA = document.getElementById('cmp-country-a');
+    const selB = document.getElementById('cmp-country-b');
+    if (selA && _countriesData.length && selA.options.length <= 1) {
+        _countriesData.forEach(c => {
+            const opt = `<option value="${c.country_iso3}">${esc(c.country_name || c.country_iso3)}</option>`;
+            selA.insertAdjacentHTML('beforeend', opt);
+            selB.insertAdjacentHTML('beforeend', opt);
+        });
+        // Pre-fill with currently viewed country if any
+        if (_currentIso3) selA.value = _currentIso3;
+    }
+
+    _compareModal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    _compareModal.show();
+}
+
+async function onCompareSelect() {
+    const iso3a = document.getElementById('cmp-country-a')?.value;
+    const iso3b = document.getElementById('cmp-country-b')?.value;
+    if (!iso3a || !iso3b) return;
+    const body = document.getElementById('cmp-body');
+    body.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+    try {
+        const [dataA, dataB] = await Promise.all([
+            api(`/api/country/${iso3a}`),
+            api(`/api/country/${iso3b}`),
+        ]);
+        body.innerHTML = renderComparison(dataA, dataB);
+    } catch (e) {
+        body.innerHTML = `<div class="text-danger">Failed to load: ${esc(e.message)}</div>`;
+    }
+}
+
+function renderComparison(a, b) {
+    // Helper: count A1 facilities and BSL-4 from compliance + facilities array
+    const bsl4Count = d => d.facilities.filter(f => (f.latest_containment || '').includes('4')).length;
+    const bsl3Count = d => d.facilities.filter(f => (f.latest_containment || '').includes('3')).length;
+
+    // Unique organism terms from all facilities' agents_summary (top 5)
+    const organisms = d => {
+        const words = new Set();
+        d.facilities.forEach(f => {
+            if (!f.agents_summary) return;
+            // Extract short parenthetical words of interest (simple split)
+            f.agents_summary.split(/[,;\/\s]+/).forEach(w => {
+                const t = w.trim().toLowerCase();
+                if (t.length > 4) words.add(t.charAt(0).toUpperCase() + t.slice(1));
+            });
+        });
+        return [...words].slice(0, 12).join(', ');
+    };
+
+    const years = d => {
+        const byYear = {};
+        d.compliance.forEach(r => {
+            if (!byYear[r.year]) byYear[r.year] = {};
+            byYear[r.year][r.form] = r.status;
+        });
+        return byYear;
+    };
+
+    const miniGrid = (byYear) => {
+        const sortedYears = Object.keys(byYear).map(Number).sort((a, b) => a - b);
+        return `<div class="cmp-compliance-mini">${sortedYears.map(yr => {
+            const a1 = byYear[yr]['A1'];
+            const cls = a1 === 'substantive' ? 'td-sub' : a1 === 'nothing_to_declare' ? 'td-ntd' : 'td-abs';
+            return `<span class="cmp-yr-dot ${cls}" title="${yr}: ${a1 || 'absent'}"></span>`;
+        }).join('')}</div>`;
+    };
+
+    const tsA = _transparencyMap[a.country_iso3];
+    const tsB = _transparencyMap[b.country_iso3];
+    const subA = (a.compliance.map(r => r.year)).filter((v,i,arr)=>arr.indexOf(v)===i).length;
+    const subB = (b.compliance.map(r => r.year)).filter((v,i,arr)=>arr.indexOf(v)===i).length;
+
+    const col = (d, ts, subCount) => `
+        <div>
+            <div class="cmp-col-head">${esc(d.country_name)}
+                ${ts != null ? `<span style="font-size:12px;font-weight:400;margin-left:6px;color:#8090b0">${transparencyBadge(ts)}</span>` : ''}
+            </div>
+
+            <div class="cmp-section-label">SUBMISSIONS</div>
+            <div class="cmp-stat-row"><span class="cmp-stat-key">Total CBMs filed</span><span class="cmp-stat-val">${subCount}</span></div>
+            ${miniGrid(years(d))}
+
+            <div class="cmp-section-label">RESEARCH FACILITIES (A1)</div>
+            <div class="cmp-stat-row"><span class="cmp-stat-key">Unique facilities</span>
+                <span class="cmp-stat-val ${d.facilities.length > 0 ? 'highlight' : ''}">${d.facilities.length}</span></div>
+            <div class="cmp-stat-row"><span class="cmp-stat-key">BSL-4</span>
+                <span class="cmp-stat-val" style="color:#c0392b">${bsl4Count(d) || '—'}</span></div>
+            <div class="cmp-stat-row"><span class="cmp-stat-key">BSL-3</span>
+                <span class="cmp-stat-val" style="color:#e67e22">${bsl3Count(d) || '—'}</span></div>
+
+            ${organisms(d) ? `<div class="cmp-section-label">DECLARED ORGANISMS (SAMPLE)</div>
+                <div class="cmp-organisms">${esc(organisms(d))}</div>` : ''}
+        </div>`;
+
+    return `<div class="cmp-grid">${col(a, tsA, subA)}${col(b, tsB, subB)}</div>
+        <div style="text-align:right;margin-top:12px">
+            <button class="cmp-export-btn" onclick="exportComparison('${a.country_iso3}','${b.country_iso3}')">⬇ Export comparison CSV</button>
+        </div>`;
+}
+
+function exportComparison(iso3a, iso3b) {
+    const dataA = _countriesData.find(c => c.country_iso3 === iso3a);
+    const dataB = _countriesData.find(c => c.country_iso3 === iso3b);
+    if (!dataA || !dataB) return;
+    const rows = [
+        ['metric', iso3a, iso3b],
+        ['Country', dataA.country_name || iso3a, dataB.country_name || iso3b],
+        ['Submissions', dataA.submission_count, dataB.submission_count],
+        ['Latest year', dataA.latest_year, dataB.latest_year],
+        ['Research facilities', dataA.facility_count, dataB.facility_count],
+        ['BSL-4 facilities', dataA.bsl4_count || 0, dataB.bsl4_count || 0],
+        ['Transparency score', _transparencyMap[iso3a] ?? '', _transparencyMap[iso3b] ?? ''],
+    ];
+    const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g,'""')}"`).join(',')).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+    a.download = `cbm-compare-${iso3a}-${iso3b}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+// ── Country report card export ────────────────────────────────────────────────
+
+/**
+ * Generates a self-contained HTML report card for the currently selected country
+ * and opens it in a new browser tab. Designed to be printable.
+ */
+async function exportCountryReport(iso3) {
+    if (!iso3) iso3 = _currentIso3;
+    if (!iso3) return;
+    const data = await api(`/api/country/${iso3}`).catch(() => null);
+    if (!data) return;
+
+    const ts = _transparencyMap[iso3];
+    const cr = complianceRates[iso3] || {};
+    const bsl4facs = data.facilities.filter(f => (f.latest_containment || '').includes('4'));
+    const subYears = [...new Set(data.compliance.map(r => r.year))].sort((a,b) => b - a);
+    const a1sub = data.compliance.filter(r => r.form === 'A1' && r.status === 'substantive').length;
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>CBM Report: ${data.country_name}</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; color: #222; font-size: 13px; }
+  h1 { font-size: 22px; border-bottom: 2px solid #ccc; padding-bottom: 8px; }
+  h2 { font-size: 14px; font-weight: 700; color: #444; margin-top: 20px; letter-spacing: 0.05em; }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  th, td { border: 1px solid #ddd; padding: 5px 10px; text-align: left; font-size: 12px; }
+  th { background: #f0f2f8; font-weight: 700; color: #555; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700; }
+  .bsl4 { background: #fdecea; color: #c0392b; }
+  .bsl3 { background: #fff4e5; color: #e67e22; }
+  .footer { margin-top: 30px; color: #888; font-size: 11px; border-top: 1px solid #eee; padding-top: 8px; }
+</style></head>
+<body>
+<h1>CBM Report Card: ${data.country_name}</h1>
+<p><strong>ISO3:</strong> ${iso3} &nbsp; <strong>Submissions:</strong> ${subYears.length}
+(${subYears[subYears.length-1] || '?'}–${subYears[0] || '?'})
+&nbsp; <strong>A1 substantive rate:</strong> ${cr.a1_rate != null ? Math.round(cr.a1_rate*100)+'%' : 'N/A'}
+${ts != null ? `&nbsp; <strong>Transparency index:</strong> ${ts}/100` : ''}</p>
+
+<h2>SUBMISSION YEARS</h2>
+<p>${subYears.join(', ')}</p>
+
+<h2>DECLARED RESEARCH FACILITIES (A1)</h2>
+${data.facilities.length ? `<table>
+<tr><th>Facility</th><th>Containment</th><th>Years</th></tr>
+${data.facilities.map(f => `<tr>
+  <td>${f.canonical_name || '[Unnamed]'}</td>
+  <td>${f.latest_containment
+      ? `<span class="badge ${f.latest_containment.includes('4') ? 'bsl4' : 'bsl3'}">${f.latest_containment}</span>`
+      : '—'}</td>
+  <td>${(f.years_declared || []).length}</td>
+</tr>`).join('')}
+</table>` : '<p><em>No A1 facilities declared.</em></p>'}
+
+${bsl4facs.length ? `<h2>BSL-4 FACILITIES</h2>
+<ul>${bsl4facs.map(f => `<li><strong>${f.canonical_name || '[Unnamed]'}</strong></li>`).join('')}</ul>` : ''}
+
+<div class="footer">Generated from CBM Facility Explorer · bwc-cbm.un.org · Data as of 2026-03-17</div>
+</body></html>`;
+
+    const blob = new Blob([html], {type: 'text/html'});
+    const url  = URL.createObjectURL(blob);
+    const win  = window.open(url, '_blank');
+    if (!win) {
+        // Fallback: download file
+        const a = document.createElement('a');
+        a.href = url; a.download = `cbm-report-${iso3}.html`; a.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// ── Facility biography timeline ───────────────────────────────────────────────
+
+/**
+ * Renders a horizontal SVG timeline for a facility's declaration history.
+ * Each year is marked with a dot; notable events (BSL-4 gained, area change) are annotated.
+ * @param {Array} yearRecords  — year_records array from /api/entity/{id} (DESC order)
+ * @returns {string} HTML string
+ */
+function renderTimelineTab(yearRecords) {
+    if (!yearRecords || yearRecords.length < 2) {
+        return '<div class="text-muted p-3" style="font-size:13px">Not enough data for a timeline (need ≥ 2 years).</div>';
+    }
+
+    // Work in ascending order for layout
+    const asc = [...yearRecords].reverse();
+    const years = asc.map(r => r.year);
+    const minY = years[0], maxY = years[years.length - 1];
+    const span = maxY - minY || 1;
+
+    const W = 560, H = 100;
+    const padL = 30, padR = 30, midY = 42;
+    const innerW = W - padL - padR;
+
+    const xOf = y => padL + ((y - minY) / span) * innerW;
+
+    // Build event list from year-on-year diffs
+    const events = [];
+    for (let i = 1; i < asc.length; i++) {
+        const prev = asc[i - 1], curr = asc[i];
+        if (curr.year - prev.year > 4) continue;
+        if (!prev.has_bsl4 && curr.has_bsl4)  events.push({ year: curr.year, label: '⬆ BSL-4', color: '#c0392b' });
+        if (prev.has_bsl4  && !curr.has_bsl4) events.push({ year: curr.year, label: '⬇ BSL-4', color: '#888' });
+        const p4 = prev.bsl4_area_m2, c4 = curr.bsl4_area_m2;
+        if (p4 && c4 && Math.abs((c4-p4)/p4) >= 0.25) {
+            events.push({ year: curr.year, label: `${c4>p4?'▲':'▼'} ${Math.abs(((c4-p4)/p4)*100).toFixed(0)}% BSL-4`, color: '#e67e22' });
+        }
+    }
+
+    // Year labels every 5 years or all years if span ≤ 10
+    const labelYears = span <= 10 ? years : years.filter(y => y % 5 === 0 || y === minY || y === maxY);
+
+    // Draw the baseline, year dots, event markers
+    const baseline = `<line x1="${padL}" y1="${midY}" x2="${W-padR}" y2="${midY}" stroke="#3a3a5a" stroke-width="2"/>`;
+
+    const dots = asc.map(r => {
+        const x     = xOf(r.year).toFixed(1);
+        const fill  = r.has_bsl4 ? '#c0392b' : '#4a8ad4';
+        return `<circle cx="${x}" cy="${midY}" r="5" fill="${fill}" stroke="#1e2130" stroke-width="1.5" data-year="${r.year}" style="cursor:pointer"/>`;
+    }).join('');
+
+    const yearLabels = labelYears.map(y => {
+        const x = xOf(y).toFixed(1);
+        return `<text x="${x}" y="${midY+20}" text-anchor="middle" class="tl-year-label">${y}</text>`;
+    }).join('');
+
+    // Event annotation: alternate above/below to avoid overlap
+    const eventSvg = events.map((ev, i) => {
+        const x   = xOf(ev.year).toFixed(1);
+        const up  = i % 2 === 0;
+        const lineY1 = up ? midY - 6 : midY + 6;
+        const lineY2 = up ? midY - 22 : midY + 22;
+        const textY  = up ? midY - 26 : midY + 30;
+        return `<line x1="${x}" y1="${lineY1}" x2="${x}" y2="${lineY2}" stroke="${ev.color}" stroke-width="1.2" stroke-dasharray="2,2"/>
+            <text x="${x}" y="${textY}" text-anchor="middle" font-size="8" fill="${ev.color}">${ev.label}</text>`;
+    }).join('');
+
+    // Tooltip on dot hover — use a global div
+    let tlTip = document.getElementById('tl-tooltip');
+    if (!tlTip) {
+        tlTip = document.createElement('div');
+        tlTip.id = 'tl-tooltip';
+        tlTip.className = 'tl-tooltip';
+        document.body.appendChild(tlTip);
+    }
+
+    // Build year info lookup for JS tooltip
+    const recMap = JSON.stringify(Object.fromEntries(asc.map(r => [r.year, {
+        cont: r.highest_containment || 'N/A',
+        b4:   r.bsl4_area_m2 || null,
+        p:    r.personnel_total || null,
+    }])));
+
+    const svg = `<svg class="timeline-svg" viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px"
+            xmlns="http://www.w3.org/2000/svg"
+            onmouseleave="document.getElementById('tl-tooltip').style.display='none'"
+            data-recs='${recMap.replace(/'/g, '&#39;')}'>
+        ${baseline}${eventSvg}${dots}${yearLabels}
+    </svg>`;
+
+    // Legend
+    const legend = `<div style="display:flex;gap:14px;margin-top:6px;font-size:11px;color:#8090b0">
+        <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#c0392b;margin-right:3px;vertical-align:middle"></span>BSL-4 year</span>
+        <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#4a8ad4;margin-right:3px;vertical-align:middle"></span>Non-BSL-4 year</span>
+    </div>`;
+
+    return `<div class="timeline-wrap">${svg}${legend}</div>
+        <p style="font-size:11px;color:#6070a0;margin-top:8px">Hover dots for year details. Annotated events: BSL-4 gained/lost, large area changes.</p>`;
+}
+
+// Dot hover handler (called from SVG mouseover on circles)
+// Uses a delegated listener attached after insert, so we use an inline approach
+function initTimelineHover(container) {
+    const svg = container.querySelector('svg.timeline-svg');
+    if (!svg) return;
+    const tip = document.getElementById('tl-tooltip');
+    if (!tip) return;
+    const recs = JSON.parse(svg.dataset.recs || '{}');
+
+    svg.querySelectorAll('circle').forEach((dot, i) => {
+        dot.style.cursor = 'pointer';
+        dot.addEventListener('mouseover', e => {
+            const year = parseInt(dot.getAttribute('data-year') || '0') || null;
+            if (!year) return;
+            const r = recs[year];
+            if (!r) return;
+            tip.innerHTML = `<strong>${year}</strong><br>
+                Containment: ${r.cont}<br>
+                ${r.b4 ? `BSL-4 area: ${r.b4} m²<br>` : ''}
+                ${r.p  ? `Personnel: ${r.p}<br>` : ''}`;
+            tip.style.display = 'block';
+            tip.style.left = (e.clientX + 12) + 'px';
+            tip.style.top  = (e.clientY - 10) + 'px';
+        });
+        dot.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    });
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────

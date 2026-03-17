@@ -181,6 +181,28 @@
                     <label class="fp-check"><input type="checkbox" id="hide-low" onchange="onFilterChange()"> Hide low-confidence geocodes</label>
                 </div>
 
+                <!-- Lapsed declarations toggle: show facilities that went dark -->
+                <div class="fp-section" id="fp-lapsed-section">
+                    <div class="fp-label">LAPSED DECLARATIONS <span class="fp-sublabel">(Research only)</span></div>
+                    <label class="fp-check" style="margin-bottom:6px">
+                        <input type="checkbox" id="lapsed-toggle" onchange="onLapsedToggle()">
+                        Show facilities that went dark
+                    </label>
+                    <div id="lapsed-threshold-row" style="display:none">
+                        <div style="font-size:11px;color:#6070a0;margin-bottom:4px">
+                            Lapsed if last declared ≥
+                            <input type="number" id="lapsed-years" value="3" min="1" max="20"
+                                   style="width:42px;padding:1px 4px;font-size:11px;border:1px solid #c8d0e8;border-radius:3px;color:#2a3060;background:#eef1fa;text-align:center"
+                                   oninput="onLapsedThresholdChange(this.value)">
+                            years before country's latest CBM
+                        </div>
+                        <div class="fp-lapsed-legend">
+                            <span><span class="fp-lapsed-dot active"></span>Active</span>
+                            <span><span class="fp-lapsed-dot lapsed"></span>Lapsed</span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- FEATURE 4: Choropleth form selector -->
                 <div class="fp-section">
                     <div class="fp-label">CHOROPLETH <span class="fp-sublabel">(submission rate by form)</span></div>
@@ -200,7 +222,11 @@
                     <button class="fp-btn" id="fp-copy" onclick="copyPermalink()">🔗 Copy link</button>
                     <button class="fp-btn" onclick="showGlobalTable()">⊞ All countries</button>
                     <button class="fp-btn" onclick="showTrends()">📈 Trends</button>
+                    <button class="fp-btn" id="fp-compare" onclick="showCompare()" title="Compare two countries side by side">⚖ Compare</button>
                 </div>
+
+                <!-- Active filter chips: shows what is currently filtering the map -->
+                <div id="map-filter-chips" style="display:none; padding:6px 12px 8px; border-top:1px solid #eef0f8; flex-wrap:wrap; gap:4px; font-size:11px;"></div>
 
             </div><!-- /fp-body -->
         </div><!-- /filter-panel -->
@@ -358,6 +384,36 @@
             </div>
             <div class="modal-body p-0" id="gt-tbody">
                 <div class="text-center py-4 text-muted">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Country comparison modal ─────────────────────────────────────────── -->
+<div class="modal fade" id="compare-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Country Comparison</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="cmp-selector-row">
+                    <div class="cmp-selector-wrap">
+                        <label class="cmp-selector-label">Country A</label>
+                        <select id="cmp-country-a" class="cmp-select" onchange="onCompareSelect()">
+                            <option value="">— select country —</option>
+                        </select>
+                    </div>
+                    <div class="cmp-vs">vs</div>
+                    <div class="cmp-selector-wrap">
+                        <label class="cmp-selector-label">Country B</label>
+                        <select id="cmp-country-b" class="cmp-select" onchange="onCompareSelect()">
+                            <option value="">— select country —</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="cmp-body"><div class="text-center text-muted py-4">Select two countries above to compare.</div></div>
             </div>
         </div>
     </div>
