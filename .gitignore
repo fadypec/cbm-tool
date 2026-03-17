@@ -22,3 +22,13 @@ env/
 
 # macOS
 .DS_Store
+
+# Database dumps
+cbm_dump.sql
+*.sql.gz
+
+# Internal working documents (not for public repo)
+nextsteps.md
+ROADMAP.md
+VALIDATION_CHECKLIST.md
+cbm-architecture.md
