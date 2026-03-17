@@ -27,6 +27,10 @@
         <button id="search-mode-btn" onclick="toggleSearchMode()" title="Switch to AI natural language search">🤖</button>
         <ul id="search-results"></ul>
     </div>
+    <!-- Review queue button: badge shows count of flagged records; hidden when zero -->
+    <button id="navbar-review" onclick="showReviewQueue()" title="View all facilities flagged for review" style="display:none">
+        🚩 Review Queue <span id="review-badge" class="review-badge">0</span>
+    </button>
     <button id="navbar-about" data-bs-toggle="modal" data-bs-target="#about-modal">About</button>
 </nav>
 
@@ -414,6 +418,21 @@
                     </div>
                 </div>
                 <div id="cmp-body"><div class="text-center text-muted py-4">Select two countries above to compare.</div></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Review queue modal ────────────────────────────────────────────────── -->
+<div class="modal fade" id="review-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">🚩 Review Queue</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0" id="review-modal-body">
+                <div class="text-center py-4 text-muted">Loading…</div>
             </div>
         </div>
     </div>

@@ -96,6 +96,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         applyFilters();
         addLegend();
         loadChoropleth();
+
+        // Review queue badge: non-critical, fire-and-forget
+        refreshReviewBadge().catch(() => {});
     } catch (e) {
         console.error('Init failed:', e);
         document.getElementById('country-list').innerHTML =
@@ -400,7 +403,7 @@ function buildPopup(layer, feature) {
         : `<span style="display:inline-block;padding:1px 7px;border-radius:4px;background:${color};color:#fff;font-size:11px">${layerLabel} facility</span>`;
 
     const historyLink = layer === 'A1'
-        ? `<br><a class="popup-link" href="#" onclick="showEntityModal('${p.id}');return false;">Full history →</a>`
+        ? `<br><a class="popup-link" href="#" onclick="showEntityModal('${esc(p.id)}');return false;">Full history →</a>`
         : '';
 
     // FEATURE 2: agents preview line in popup (A1 only)
@@ -680,6 +683,9 @@ function exportCSV() {
     const activeLayers = [];
     for (const layer of ['A1', 'A2', 'G']) {
         if (!STATE.layers[layer] || !DATA[layer]) continue;
+        // Organism filter is A1-only (A2/G have no agents_summary); skip other layers
+        // when organism is active so the export matches exactly what the map shows
+        if (STATE.organism && layer !== 'A1') continue;
         activeLayers.push(layer);
         DATA[layer].features
             .filter(f => matchesFilter(layer, f))
@@ -703,9 +709,10 @@ function exportCSV() {
     // FEATURE 3: filename encodes active layers (e.g. cbm-A1-G-2023.csv)
     const layerStr = activeLayers.join('-');
     const yearStr  = STATE.year ? '-' + STATE.year : '';
+    const orgStr   = STATE.organism ? '-' + STATE.organism.toLowerCase().replace(/\s+/g, '_') : '';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = `cbm-${layerStr}${yearStr}.csv`;
+    a.download = `cbm-${layerStr}${yearStr}${orgStr}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
 }
@@ -991,7 +998,7 @@ function renderCountryList(countries) {
         const tBadge = ts != null ? transparencyBadge(ts) : '';
         return `
         <div class="country-item" data-iso3="${c.country_iso3}"
-             onclick="selectCountry('${c.country_iso3}')">
+             onclick="selectCountry('${esc(c.country_iso3)}')">
             <div class="country-name">${esc(c.country_name || c.country_iso3)}${tBadge}</div>
             <div class="country-meta">
                 ${c.submission_count} submission${c.submission_count !== 1 ? 's' : ''}
@@ -1059,7 +1066,7 @@ function renderCountryDetail(data) {
     if (sub && cr) {
         const rate  = cr.a1_rate != null ? ` · A1 ${Math.round(cr.a1_rate * 100)}%` : '';
         const tBadge = ts != null ? ` · <span style="font-size:10px">${transparencyBadge(ts)}</span>` : '';
-        const exportBtn = `<button onclick="exportCountryReport('${data.country_iso3 || _currentIso3}')"
+        const exportBtn = `<button onclick="exportCountryReport('${esc(data.country_iso3 || _currentIso3)}')"
             style="background:none;border:none;color:#4a5280;font-size:10px;cursor:pointer;padding:0 0 0 6px"
             title="Export report card">↗ report</button>`;
         sub.innerHTML = `${cr.submission_count} sub${cr.submission_count !== 1 ? 's' : ''}${rate}${tBadge}${exportBtn}`;
@@ -1163,7 +1170,7 @@ function renderFacilityList(facilities) {
             ? `<div class="fac-meta" style="color:#5a6a50">${esc(f.agents_summary.slice(0, 60))}${f.agents_summary.length > 60 ? '…' : ''}</div>`
             : '';
         return `
-            <div class="fac-item" onclick="showEntityModal('${f.canonical_facility_id}')">
+            <div class="fac-item" onclick="showEntityModal('${esc(f.canonical_facility_id)}')">
                 <div class="fac-name">${esc(f.canonical_name || '[Unnamed facility]')}</div>
                 <div class="fac-meta">
                     ${f.latest_containment
@@ -1609,8 +1616,8 @@ async function doSearch(q) {
                 const layerLabel = _LAYER_LABEL[f.layer] || f.layer;
                 const isActivity = f.match_type === 'activity';
                 const onclick = f.id
-                    ? `selectSearchResult('${f.id}','${f.country_iso3}','${f.layer}')`
-                    : `selectCountry('${f.country_iso3}')`;
+                    ? `selectSearchResult('${esc(f.id)}','${esc(f.country_iso3)}','${esc(f.layer)}')`
+                    : `selectCountry('${esc(f.country_iso3)}')`;
 
                 // For activity matches show a short snippet of the matched text
                 let snippetHtml = '';
@@ -1725,7 +1732,7 @@ function renderGlobalTable(rows, sortCol, sortDir) {
         const bsl4 = c.bsl4_count
             ? `<strong style="color:#c0392b">${c.bsl4_count}</strong>`
             : '<span style="color:#aaa">—</span>';
-        html += `<tr class="gt-row" onclick="selectCountry('${c.country_iso3}');bootstrap.Modal.getInstance(document.getElementById('global-table-modal')).hide()">
+        html += `<tr class="gt-row" onclick="selectCountry('${esc(c.country_iso3)}');bootstrap.Modal.getInstance(document.getElementById('global-table-modal')).hide()">
             <td>${esc(c.country_name || c.country_iso3)}</td>
             <td>${c.submission_count || 0}</td>
             <td>${rate}</td>
@@ -1820,8 +1827,7 @@ function renderPathogenChart(data, container) {
         `<p class="pathogen-chart-header">Number of unique declared research facilities mentioning each organism. Click any row to filter the map.</p>` +
         data.map(d => {
             const pct = (d.count / maxCount * 100).toFixed(1);
-            const safeTerm = d.term.replace(/'/g, "\\'");
-            return `<div class="pathogen-row" onclick="applyOrganismFilter('${safeTerm}')">
+            return `<div class="pathogen-row" onclick="applyOrganismFilter('${esc(d.term)}')">
                 <span class="pathogen-label">${esc(d.label)}</span>
                 <div class="pathogen-bar-wrap"><div class="pathogen-bar" style="width:${pct}%"></div></div>
                 <span class="pathogen-count">${d.count}</span>
@@ -1937,34 +1943,216 @@ function renderTrendsChart(d) {
     return svg + legend;
 }
 
+// ── Review key auth ─────────────────────────────────────────────────────────
+//
+// The API requires X-Review-Key on all flag/unflag writes and on GET /api/flagged.
+// The key is stored in sessionStorage so the user only needs to enter it once
+// per browser session.  It is never persisted to localStorage or sent with any
+// other request.
+
+const REVIEW_KEY_STORAGE = 'cbm_review_key';
+
+/**
+ * Return the stored review key, prompting the user if it has not been entered
+ * yet this session.  Returns null if the user cancels the prompt.
+ */
+function getWriteKey() {
+    let key = sessionStorage.getItem(REVIEW_KEY_STORAGE);
+    if (!key) {
+        key = prompt('Enter review key to continue:');
+        if (!key) return null;
+        sessionStorage.setItem(REVIEW_KEY_STORAGE, key);
+    }
+    return key;
+}
+
+/**
+ * Called when the API returns 401 — clears the cached key so the user is
+ * re-prompted on their next action.
+ */
+function clearWriteKey() {
+    sessionStorage.removeItem(REVIEW_KEY_STORAGE);
+}
+
+/**
+ * Wrapper around fetch for write operations that adds the review key header
+ * and handles 401 by clearing the cached key and surfacing a clear error.
+ */
+async function authedPost(url, body) {
+    const key = getWriteKey();
+    if (key === null) throw new Error('Cancelled');
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Review-Key': key },
+        body: JSON.stringify(body),
+    });
+    if (resp.status === 401) {
+        clearWriteKey();
+        throw new Error('Incorrect review key — please try again.');
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp;
+}
+
+/**
+ * Wrapper around the api() helper for protected GET endpoints (e.g. /api/flagged).
+ * Returns null without throwing if no key is stored (badge just stays hidden).
+ */
+async function authedGet(path) {
+    const key = sessionStorage.getItem(REVIEW_KEY_STORAGE);
+    if (!key) return null;  // Don't prompt for reads; just stay silent
+    const resp = await fetch(path, { headers: { 'X-Review-Key': key } });
+    if (resp.status === 401) { clearWriteKey(); return null; }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+}
+
 // ── FEATURE 8: Flag for review ─────────────────────────────────────────────────
 
 async function flagFacility(entityId, year) {
     const note = prompt(`Add a note for flagging ${entityId} (${year}):`, '') ?? '';
     if (note === null) return; // user cancelled
     try {
-        await fetch(`/api/entity/${encodeURIComponent(entityId)}/flag/${year}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ flag: true, note: note || null }),
-        });
-        // Re-fetch and re-render the entity modal
+        await authedPost(`/api/entity/${encodeURIComponent(entityId)}/flag/${year}`,
+                         { flag: true, note: note || null });
+        // Re-fetch and re-render the entity modal, then update navbar badge
         showEntityModal(entityId);
+        await refreshReviewBadge();
     } catch (e) {
-        alert('Failed to flag record: ' + e.message);
+        if (e.message !== 'Cancelled') alert('Failed to flag record: ' + e.message);
     }
 }
 
 async function unflagFacility(entityId, year) {
     try {
-        await fetch(`/api/entity/${encodeURIComponent(entityId)}/flag/${year}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ flag: false, note: null }),
-        });
+        await authedPost(`/api/entity/${encodeURIComponent(entityId)}/flag/${year}`,
+                         { flag: false, note: null });
+        // Refresh entity modal if open, then update queue badge and list
         showEntityModal(entityId);
+        await refreshReviewBadge();
+        // If review modal is currently open, reload its contents
+        const modal = document.getElementById('review-modal');
+        if (modal && modal.classList.contains('show')) loadReviewQueue();
     } catch (e) {
-        alert('Failed to unflag record: ' + e.message);
+        if (e.message !== 'Cancelled') alert('Failed to unflag record: ' + e.message);
+    }
+}
+
+// ── Review Queue ────────────────────────────────────────────────────────────
+
+/**
+ * Fetch flagged count and update the navbar badge.
+ * Only runs if a review key is already cached — never prompts automatically.
+ * Called on init and after any flag/unflag action.
+ */
+async function refreshReviewBadge() {
+    try {
+        const rows = await authedGet('/api/flagged');
+        const btn   = document.getElementById('navbar-review');
+        const badge = document.getElementById('review-badge');
+        if (!btn || !badge) return;
+        if (!rows || rows.length === 0) {
+            btn.style.display = 'none';
+        } else {
+            badge.textContent = rows.length;
+            btn.style.display = '';
+        }
+    } catch (_) { /* non-critical */ }
+}
+
+/** Open the review queue modal and load current flags. */
+function showReviewQueue() {
+    const modal = new bootstrap.Modal(document.getElementById('review-modal'));
+    modal.show();
+    loadReviewQueue();
+}
+
+/** Populate the review queue modal body from /api/flagged. */
+async function loadReviewQueue() {
+    const body = document.getElementById('review-modal-body');
+    if (!body) return;
+    body.innerHTML = '<div class="text-center py-4 text-muted">Loading…</div>';
+    try {
+        // authedGet prompts if no key stored, returns null on cancel/401
+        let rows = await authedGet('/api/flagged');
+        if (rows === null) {
+            // Key was missing or wrong — prompt explicitly this time
+            const key = getWriteKey();
+            if (!key) { body.innerHTML = '<div class="text-center py-4 text-muted">Key required to view review queue.</div>'; return; }
+            const resp = await fetch('/api/flagged', { headers: { 'X-Review-Key': key } });
+            if (resp.status === 401) { clearWriteKey(); body.innerHTML = '<div class="text-center py-4 text-danger">Incorrect review key.</div>'; return; }
+            rows = await resp.json();
+        }
+        if (rows.length === 0) {
+            body.innerHTML = '<div class="text-center py-4 text-muted">No facilities are currently flagged for review.</div>';
+            return;
+        }
+        const tableRows = rows.map(r => `
+            <tr class="rq-row">
+                <td>
+                    <a class="rq-entity-link" href="#"
+                       onclick="bootstrap.Modal.getInstance(document.getElementById('review-modal'))?.hide();
+                                showEntityModal('${esc(r.canonical_facility_id)}'); return false;"
+                    >${esc(r.canonical_name)}</a>
+                </td>
+                <td>${esc(r.country_iso3)}</td>
+                <td>${r.year}</td>
+                <td class="rq-note">${r.flag_note ? esc(r.flag_note) : '<span class="text-muted">—</span>'}</td>
+                <td>
+                    ${r.source_url
+                        ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener" class="rq-src-link">source ↗</a>`
+                        : ''}
+                </td>
+                <td>
+                    <button class="flag-btn rq-unflag-btn"
+                            onclick="rqUnflag('${esc(r.canonical_facility_id)}', ${r.year}, this)">
+                        Unflag
+                    </button>
+                </td>
+            </tr>`).join('');
+
+        body.innerHTML = `
+            <table class="rq-table">
+                <thead>
+                    <tr>
+                        <th>Facility</th>
+                        <th>Country</th>
+                        <th>Year</th>
+                        <th>Note</th>
+                        <th>Source</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>${tableRows}</tbody>
+            </table>`;
+    } catch (e) {
+        body.innerHTML = `<div class="text-center py-4 text-danger">Failed to load flags: ${esc(e.message)}</div>`;
+    }
+}
+
+/**
+ * Unflag directly from the review queue row without opening the entity modal.
+ * Removes the row on success and refreshes the badge.
+ */
+async function rqUnflag(entityId, year, btn) {
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+        await authedPost(`/api/entity/${encodeURIComponent(entityId)}/flag/${year}`,
+                         { flag: false, note: null });
+        // Remove the row from the table
+        btn.closest('tr').remove();
+        // If table body is now empty, show the empty state
+        const tbody = document.querySelector('#review-modal-body tbody');
+        if (tbody && tbody.children.length === 0) {
+            document.getElementById('review-modal-body').innerHTML =
+                '<div class="text-center py-4 text-muted">No facilities are currently flagged for review.</div>';
+        }
+        await refreshReviewBadge();
+    } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Unflag';
+        if (e.message !== 'Cancelled') alert('Failed to unflag: ' + e.message);
     }
 }
 
@@ -2015,8 +2203,8 @@ function renderChangesPanel(data, container) {
             const icon = _CHG_ICONS[c.type] || '•';
             const yearRange = `${c.from_year}→${c.to_year}`;
             const onclick = c.canonical_facility_id
-                ? `showEntityModal('${c.canonical_facility_id}')`
-                : `selectCountry('${c.country_iso3}')`;
+                ? `showEntityModal('${esc(c.canonical_facility_id)}')`
+                : `selectCountry('${esc(c.country_iso3)}')`;
             return `<div class="chg-row ${sev.cls}" onclick="${onclick}">
                 <div class="chg-left">
                     <span class="chg-type-icon">${icon}</span>
@@ -2565,7 +2753,7 @@ function renderComparison(a, b) {
 
     return `<div class="cmp-grid">${col(a, tsA, subA)}${col(b, tsB, subB)}</div>
         <div style="text-align:right;margin-top:12px">
-            <button class="cmp-export-btn" onclick="exportComparison('${a.country_iso3}','${b.country_iso3}')">⬇ Export comparison CSV</button>
+            <button class="cmp-export-btn" onclick="exportComparison('${esc(a.country_iso3)}','${esc(b.country_iso3)}')">⬇ Export comparison CSV</button>
         </div>`;
 }
 

@@ -32,6 +32,66 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
     text-align: center;
 }
 
+/* ── Navbar Review Queue button ─────────────────────────────────────────── */
+#navbar-review {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid #6b1a1a;
+    border-radius: 5px;
+    color: #e08080;
+    font-size: 12px;
+    padding: 4px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+#navbar-review:hover { background: #2a0f0f; border-color: #c0392b; color: #f0a0a0; }
+.review-badge {
+    display: inline-block;
+    background: #c0392b;
+    color: #fff;
+    border-radius: 9px;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    margin-left: 4px;
+    vertical-align: middle;
+    min-width: 18px;
+    text-align: center;
+}
+
+/* ── Review queue modal table ────────────────────────────────────────────── */
+.rq-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.rq-table thead th {
+    background: #141620;
+    color: #6070a0;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 8px 12px;
+    border-bottom: 1px solid #2a2a3a;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.rq-row {
+    border-bottom: 1px solid #1e2030;
+    transition: background 0.1s;
+}
+.rq-row:hover { background: #1a1c2a; }
+.rq-row td { padding: 8px 12px; color: #c0ccf0; vertical-align: top; }
+.rq-entity-link { color: #7090e0; text-decoration: none; font-weight: 500; }
+.rq-entity-link:hover { color: #a0b8f8; text-decoration: underline; }
+.rq-note { color: #8090b0; font-style: italic; max-width: 260px; }
+.rq-src-link { color: #5090c0; font-size: 11px; text-decoration: none; }
+.rq-src-link:hover { text-decoration: underline; }
+.rq-unflag-btn { white-space: nowrap; }
+
 /* ── Navbar About button ────────────────────────────────────────────────── */
 #navbar-about {
     flex-shrink: 0;
