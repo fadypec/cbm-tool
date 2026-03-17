@@ -24,6 +24,7 @@
     <span id="stats-bar"></span>
     <div id="search-wrap">
         <input id="search-input" type="text" placeholder="Search facilities, organisms…" autocomplete="off">
+        <button id="search-mode-btn" onclick="toggleSearchMode()" title="Switch to AI natural language search">🤖</button>
         <ul id="search-results"></ul>
     </div>
     <button id="navbar-about" data-bs-toggle="modal" data-bs-target="#about-modal">About</button>
@@ -199,7 +200,6 @@
                     <button class="fp-btn" id="fp-copy" onclick="copyPermalink()">🔗 Copy link</button>
                     <button class="fp-btn" onclick="showGlobalTable()">⊞ All countries</button>
                     <button class="fp-btn" onclick="showTrends()">📈 Trends</button>
-                    <button class="fp-btn" onclick="showAIQuery()">🤖 AI Query</button>
                 </div>
 
             </div><!-- /fp-body -->

@@ -39,6 +39,7 @@ let entityModal   = null;
 let choroForm     = 'A1';
 let filterCollapsed = false;
 let searchTimer   = null;
+let _searchMode   = 'normal'; // 'normal' | 'ai'
 let _countriesData  = [];   // full /api/countries response, for global table
 let _playInterval   = null; // year animation interval
 let _hashTimer      = null; // debounce for history.replaceState
@@ -1366,6 +1367,7 @@ function initSearch() {
     const results = document.getElementById('search-results');
 
     input.addEventListener('input', () => {
+        if (_searchMode === 'ai') return;  // AI mode: wait for Enter
         clearTimeout(searchTimer);
         const q = input.value.trim();
         if (q.length < 2) { results.classList.remove('open'); input.classList.remove('searching'); return; }
@@ -1374,6 +1376,19 @@ function initSearch() {
     });
 
     input.addEventListener('keydown', e => {
+        // AI mode: Enter submits to the AI endpoint
+        if (_searchMode === 'ai') {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const q = input.value.trim();
+                if (q.length >= 3) {
+                    results.classList.remove('open');
+                    showAIQuery(q);
+                }
+            }
+            return;
+        }
+
         if (!results.classList.contains('open')) return;
         const items = [...results.querySelectorAll('li[data-idx]')];
         const active = results.querySelector('li.sr-active');
@@ -1400,6 +1415,27 @@ function initSearch() {
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape') { results.classList.remove('open'); input.blur(); }
     });
+}
+
+function toggleSearchMode() {
+    _searchMode = _searchMode === 'normal' ? 'ai' : 'normal';
+    const btn    = document.getElementById('search-mode-btn');
+    const input  = document.getElementById('search-input');
+    const results = document.getElementById('search-results');
+    if (_searchMode === 'ai') {
+        btn.classList.add('ai-active');
+        btn.title = 'Switch back to facility search';
+        input.placeholder = 'Ask anything, e.g. "BSL-4 labs in Eastern Europe"…';
+        input.classList.add('ai-mode');
+        results.classList.remove('open');
+        input.classList.remove('searching');
+    } else {
+        btn.classList.remove('ai-active');
+        btn.title = 'Switch to AI natural language search';
+        input.placeholder = 'Search facilities, organisms…';
+        input.classList.remove('ai-mode');
+    }
+    input.focus();
 }
 
 const _LAYER_LABEL = { A1: 'Research', A2: 'Defence', G: 'Vaccine' };
@@ -1920,8 +1956,21 @@ function renderFacilityChangesTab(yearRecords) {
 
 let _aiResults = null;  // last AI query result set, for export / show-on-map
 
-function showAIQuery() {
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal')).show();
+function showAIQuery(initialQuery = '') {
+    const modalEl = document.getElementById('ai-query-modal');
+    const modal   = bootstrap.Modal.getOrCreateInstance(modalEl);
+    if (initialQuery) {
+        const inp = document.getElementById('ai-query-input');
+        if (inp) {
+            inp.value = initialQuery;
+            // Clear any stale results from a previous query
+            document.getElementById('ai-query-results').innerHTML  = '';
+            document.getElementById('ai-query-rationale').style.display = 'none';
+        }
+    }
+    modal.show();
+    // Auto-run if a query was passed (e.g. from the unified search bar)
+    if (initialQuery) setTimeout(runAIQuery, 350);
 }
 
 async function runAIQuery() {
