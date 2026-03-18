@@ -228,7 +228,7 @@ def favicon():
     return FileResponse(DASHBOARD_DIR / "static" / "favicon.svg", media_type="image/svg+xml")
 
 
-@app.get("/health", include_in_schema=False)
+@app.api_route("/health", methods=["GET", "HEAD"], include_in_schema=False)
 def health():
     """Lightweight healthcheck — no DB query, always returns 200 when the process is alive."""
     return {"status": "ok"}
