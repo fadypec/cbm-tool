@@ -10,4 +10,8 @@ COPY api/ api/
 COPY dashboard/ dashboard/
 
 EXPOSE 8000
+
+RUN adduser --disabled-password --gecos '' appuser
+USER appuser
+
 CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

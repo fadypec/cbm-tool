@@ -16,9 +16,16 @@ from __future__ import annotations
 import datetime
 import decimal
 import json
+import logging
 import os
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("cbm-api")
 
 import psycopg2
 import psycopg2.extras
@@ -63,6 +70,7 @@ def require_review_key(x_review_key: str | None = Header(default=None)) -> None:
     if not REVIEW_API_KEY:
         raise HTTPException(status_code=503, detail="Review queue not configured on this server")
     if x_review_key != REVIEW_API_KEY:
+        logger.warning("Review endpoint called with invalid key")
         raise HTTPException(status_code=401, detail="Invalid or missing X-Review-Key")
 
 # ── Connection pool ──────────────────────────────────────────────────────────
@@ -74,9 +82,11 @@ _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 async def lifespan(app: FastAPI):
     global _pool
     _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, DB_URL)
+    logger.info("DB pool initialised (1–10 connections)")
     yield
     if _pool:
         _pool.closeall()
+        logger.info("DB pool closed")
 
 
 @contextmanager
@@ -99,8 +109,9 @@ def cursor_write():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             yield cur
         conn.commit()
-    except Exception:
+    except Exception as e:
         conn.rollback()
+        logger.error("DB error, rolling back: %s", e)
         raise
     finally:
         _pool.putconn(conn)
@@ -1178,6 +1189,7 @@ def api_natural_query(request: Request, body: NaturalQueryRequest):
     """Parse a natural language query into structured filters using Claude, then return matching
     Form A1 research facilities. Requires ANTHROPIC_API_KEY environment variable.
     Rate-limited to 10 requests per minute per IP."""
+    logger.info("Natural query: %s", body.q[:80])
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured on this server")
