@@ -94,7 +94,7 @@ VISION_LANGS: set[str] = {"ar", "zh"}
 
 # ── OCR LLM correction ────────────────────────────────────────────────────────
 
-OCR_CORRECTION_MODEL = "claude-sonnet-4-20250514"
+from model_config import MODEL as OCR_CORRECTION_MODEL
 OCR_PAGE_MAX_CHARS   = 6_000   # pages larger than this are not sent for correction
 
 _CORRECTION_PROMPT = (
@@ -347,11 +347,12 @@ def correct_existing_ocr(entry: dict, client: anthropic.Anthropic) -> dict | Non
 # ── Per-document processing ───────────────────────────────────────────────────
 
 
-def process_pdf(entry: dict) -> dict | None:
+def process_pdf(entry: dict, *, force: bool = False) -> dict | None:
     """Process a single catalogue entry.
 
     If OCR is used, LLM correction is applied automatically via _get_anthropic_client().
     Returns an updated copy of the entry dict, or None on unrecoverable error.
+    Skips entries whose extracted text already exists unless *force* is True.
     """
     entry_id = entry["id"]
     pdf_path = PROJECT_ROOT / entry["local_path"]
@@ -359,6 +360,11 @@ def process_pdf(entry: dict) -> dict | None:
     if not pdf_path.exists():
         log.warning("[%s] PDF not found: %s", entry_id, pdf_path)
         return None
+
+    # Skip if already extracted (incremental mode)
+    txt_path = EXTRACTED_DIR / f"{entry_id}.txt"
+    if not force and txt_path.exists() and txt_path.stat().st_size > 0:
+        return entry  # already processed
 
     # ── pdfplumber pass ───────────────────────────────────────────────────────
     pages_data: list[dict] = []
@@ -497,6 +503,11 @@ def main() -> None:
         action="store_true",
         help="Apply LLM correction to docs with ocr_engine set but ocr_corrected=False.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-extract text even if output already exists (override incremental skip).",
+    )
     args = parser.parse_args()
 
     if not CATALOGUE_PATH.exists():
@@ -553,7 +564,7 @@ def main() -> None:
     total_pages = 0
 
     for entry in targets:
-        result = process_pdf(entry)
+        result = process_pdf(entry, force=getattr(args, 'force', False))
         if result is None:
             n_failed += 1
             continue

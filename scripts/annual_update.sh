@@ -88,17 +88,22 @@ python3 "${PROJECT_ROOT}/scripts/01_catalogue.py"
 echo ""
 
 # ── Step 2: Extract text from new PDFs ───────────────────────────────────────
+# Incremental: skips entries whose extracted text already exists.
+# Use --force to re-extract everything.
 echo "--- Step 2: Extract text (OCR if needed) ---"
 python3 "${PROJECT_ROOT}/scripts/02_extract_text.py"
 echo ""
 
 # ── Step 3: Segment form sections ────────────────────────────────────────────
+# Incremental: skips entries whose segmented output directory already exists.
+# Use --force to re-segment everything.
 echo "--- Step 3: Segment form sections ---"
 python3 "${PROJECT_ROOT}/scripts/03_segment_forms.py"
 echo ""
 
 # ── Step 4: Extract structured data — all forms ───────────────────────────────
 # FEATURE 6: Run all form extractors sequentially
+# Note: Script 04 skips documents whose output JSON already exists (incremental).
 echo "--- Step 4a: Extract Form A1 (research facilities) ---"
 python3 "${PROJECT_ROOT}/scripts/04_extract_structured.py"
 echo ""

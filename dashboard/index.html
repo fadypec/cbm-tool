@@ -68,7 +68,7 @@
                 <button class="dtab" data-action="switch-tab" data-tab="history">History</button>
             </div>
             <div id="detail-loading" class="side-placeholder">Loading…</div>
-            <div id="detail-content" style="display:none; flex:1; overflow:hidden; display:none; flex-direction:column">
+            <div id="detail-content" style="display:none; flex:1; overflow:hidden; flex-direction:column">
 
                 <!-- Compliance tab -->
                 <div id="tab-compliance" class="tab-pane side-scroll">
@@ -172,12 +172,12 @@
                     <label class="fp-check"><input type="checkbox" id="all-years" checked> Latest per country</label>
                     <div class="fp-year-row">
                         <button id="year-play" class="fp-play-btn" data-action="toggle-year-play" title="Animate through years" disabled>▶</button>
-                        <input type="number" id="year-input" min="1988" max="2025" value="2025" step="1" disabled
+                        <input type="number" id="year-input" step="1" disabled
                                placeholder="e.g. 2022">
                     </div>
-                    <input type="range" id="year-slider" min="1988" max="2025" value="2025" step="1" disabled
+                    <input type="range" id="year-slider" step="1" disabled
                            style="width:100%;margin:4px 0 0">
-                    <div class="fp-year-range"><span id="yr-min">1988</span><span id="yr-max">2025</span></div>
+                    <div class="fp-year-range"><span id="yr-min"></span><span id="yr-max"></span></div>
                 </div>
 
                 <div class="fp-section">

@@ -56,10 +56,15 @@ STRUCTURED_DIR = PROJECT_ROOT / "data" / "structured"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MODEL            = "claude-sonnet-4-20250514"
+from model_config import MODEL
 MAX_TOKENS       = 8192
 CHUNK_MAX_CHARS  = 4_000    # max chars per API call (keeps output well within 8192 token limit after translation)
 RATE_LIMIT_DELAY = 10.0     # seconds between calls  →  ≤6 req/min
+
+# Per-token pricing for cost estimation (Sonnet, as of 2025-05 pricing).
+# Update these when switching models or if pricing changes.
+COST_PER_INPUT_TOKEN  = 3e-6    # $3 / 1M input tokens
+COST_PER_OUTPUT_TOKEN = 15e-6   # $15 / 1M output tokens
 
 # Matches the start of each facility entry (field 1): English, French, Spanish, Russian/Ukrainian
 # Russian 2015 format: "N. Наименование объекта: <name>" (sequential facility numbers)
@@ -98,9 +103,6 @@ PROGRESS_INTERVAL = 10             # emit a log.info progress line every N docum
 # law listings to infer which option applies. Max doc is ~29KB, cost is trivial.
 FORM_E_MAX_CHARS = None            # no truncation
 
-# FEATURE 9: Form B — disease outbreak declarations
-# Single API call per doc, no chunking (entries are typically short free-text).
-FORM_B_MAX_CHARS = None            # no truncation
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
@@ -1225,6 +1227,9 @@ def process_entry_e(
     form_path = SEGMENTED_DIR / entry_id / "form_e.txt"
     out_path  = STRUCTURED_DIR / f"{entry_id}_form_e.json"
 
+    if out_path.exists():
+        return {"id": entry_id, "status": "skipped"}
+
     if not form_path.exists():
         return {"id": entry_id, "status": "no_form_e"}
 
@@ -1305,56 +1310,6 @@ def _write_output_e(
     )
 
 
-# ── Form B extraction ────────────────────────────────────────────────────────
-
-
-def extract_form_b(text: str, entry_id: str, client: anthropic.Anthropic) -> list[dict]:
-    """
-    FEATURE 9: Extract outbreak data from Form B text.
-    Single API call (no chunking). Returns a list of outbreak dicts.
-    Follows the same pattern as extract_form_f / process_entry_e.
-    """
-    messages = [{"role": "user", "content": text}]
-    last_t: list[float] = [0.0]
-    try:
-        resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_B)
-    except Exception as exc:
-        log.error("[%s/B] API error: %s", entry_id, exc)
-        return []
-
-    raw = resp.content[0].text.strip()
-    # SYSTEM_PROMPT_B returns a JSON array, not an object
-    try:
-        data = json.loads(raw)
-        if isinstance(data, list):
-            return data
-    except json.JSONDecodeError:
-        pass
-
-    # Try markdown fence
-    m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw, re.S)
-    if m:
-        try:
-            data = json.loads(m.group(1))
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            pass
-
-    # Try bare array
-    m = re.search(r"\[.*\]", raw, re.S)
-    if m:
-        try:
-            data = json.loads(m.group())
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            pass
-
-    log.warning("[%s/B] Response not valid JSON array", entry_id)
-    return []
-
-
 def process_entry_b(
     entry: dict,
     client: anthropic.Anthropic,
@@ -1379,9 +1334,6 @@ def process_entry_b(
         _write_output_b(out_path, entry, [], {"input_tokens": 0, "output_tokens": 0})
         return {"id": entry_id, "status": "ok", "outbreaks": 0, "calls": 0,
                 "input_tokens": 0, "output_tokens": 0}
-
-    if FORM_B_MAX_CHARS and len(text) > FORM_B_MAX_CHARS:
-        text = text[:FORM_B_MAX_CHARS]
 
     user_content = (
         f"State Party: {entry['country']} ({entry['country_iso3']})\n"
@@ -1504,8 +1456,6 @@ def main() -> None:
     # FEATURE 9: Form B — disease outbreak declarations
     parser.add_argument("--form-b", action="store_true",
                         help="Extract Form B (disease outbreak declarations).")
-    parser.add_argument("--no-e-truncate", action="store_true",
-                        help="Disable Form E truncation (send full text; for sense-checking).")
     args = parser.parse_args()
 
     if sum([args.form_g, args.form_a2, args.form_f, args.form_e, args.form_b]) > 1:
@@ -1599,8 +1549,7 @@ def main() -> None:
             result = process_entry_f(entry, client, last_t)
             item_key = None
         elif args.form_e:
-            max_chars = None if args.no_e_truncate else FORM_E_MAX_CHARS
-            result = process_entry_e(entry, client, last_t, max_chars=max_chars)
+            result = process_entry_e(entry, client, last_t)
             item_key = None
         elif args.form_b:
             # FEATURE 9: Form B dispatch
@@ -1633,7 +1582,7 @@ def main() -> None:
             elapsed  = time.time() - run_start
             rate     = elapsed / n_done          # seconds per doc
             remaining = rate * (n_total - n_done)
-            cost_so_far = total_in * 3e-6 + total_out * 15e-6
+            cost_so_far = total_in * COST_PER_INPUT_TOKEN + total_out * COST_PER_OUTPUT_TOKEN
             log.info(
                 "PROGRESS %d/%d (%.0f%%) — elapsed %s, remaining ~%s, %.1fs/doc, $%.2f spent",
                 n_done, n_total, 100 * n_done / n_total,
@@ -1657,7 +1606,7 @@ def main() -> None:
     print(f"  Total API calls:      {total_calls}")
     print(f"  Input tokens:         {total_in:,}")
     print(f"  Output tokens:        {total_out:,}")
-    cost = total_in * 3e-6 + total_out * 15e-6
+    cost = total_in * COST_PER_INPUT_TOKEN + total_out * COST_PER_OUTPUT_TOKEN
     print(f"  Est. cost (USD):      ${cost:.2f}")
     print("─────────────────────────────────────────────────────────────\n")
 

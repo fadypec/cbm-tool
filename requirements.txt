@@ -1,6 +1,5 @@
 requests>=2.31
 psycopg2-binary>=2.9
-beautifulsoup4>=4.12
 pdfplumber>=0.10
 anthropic>=0.40
 rapidfuzz>=3.5

@@ -494,19 +494,27 @@ def load_compliance_data(catalogue: list[dict]) -> list[dict]:
 # ── Entity resolution ─────────────────────────────────────────────────────────
 
 
-def resolve_entities(records: list[dict]) -> dict[int, str]:
-    """
-    Assign a canonical_facility_id to each record.
+def _resolve_entities_core(
+    records: list[dict],
+    id_format: str = "{country}_{n:03d}",
+    anchor_merges: list[tuple[str, str]] | None = None,
+) -> dict[int, str]:
+    """Unified entity resolution via Union-Find on facility names.
 
-    Facilities within the same country whose names score ≥ SIMILARITY_THRESHOLD
-    on rapidfuzz.fuzz.token_sort_ratio are merged into one canonical entity.
+    Groups records by country, then merges record indices whose facility names
+    score >= SIMILARITY_THRESHOLD on rapidfuzz token_sort_ratio.  Records from
+    the same year use the stricter SAME_YEAR_THRESHOLD to avoid false merges
+    within a single CBM submission.
 
-    Returns a dict: record_index → canonical_facility_id (e.g. "USA_001").
+    Args:
+        records: list of extracted facility dicts.
+        id_format: Python format string with {country} and {n} placeholders.
+        anchor_merges: optional (country_iso3, anchor_string) tuples for
+                       force-merging records whose names contain the anchor.
     """
-    # Group record indices by country
     by_country: dict[str, list[int]] = defaultdict(list)
     for i, rec in enumerate(records):
-        country = rec.get("extraction_metadata", {}).get("country_iso3", "UNK")
+        country = (rec.get("extraction_metadata") or {}).get("country_iso3", "UNK")
         by_country[country].append(i)
 
     uf = UnionFind()
@@ -531,19 +539,18 @@ def resolve_entities(records: list[dict]) -> dict[int, str]:
                 if fuzz.token_sort_ratio(na, nb) >= threshold:
                     uf.union(ia, ib)
 
-    # Anchor-merge pass: force-merge all records whose names contain a given
-    # anchor string (see ANCHOR_MERGES).  Handles labs whose formal name grows or
-    # shrinks with institutional context across years, causing the token_sort_ratio
-    # to fall below the similarity threshold even though the lab is the same.
-    for anchor_country, anchor in ANCHOR_MERGES:
-        anchor_lower = anchor.lower()
-        indices = by_country.get(anchor_country, [])
-        matched = [
-            i for i in indices
-            if anchor_lower in (records[i].get("facility_name") or "").lower()
-        ]
-        for i in matched[1:]:
-            uf.union(matched[0], i)
+    # Anchor-merge pass: force-merge records whose names contain a given anchor
+    # string.  Handles labs whose formal name changes across years.
+    if anchor_merges:
+        for anchor_country, anchor in anchor_merges:
+            anchor_lower = anchor.lower()
+            indices = by_country.get(anchor_country, [])
+            matched = [
+                i for i in indices
+                if anchor_lower in (records[i].get("facility_name") or "").lower()
+            ]
+            for i in matched[1:]:
+                uf.union(matched[0], i)
 
     # Group by country → root → member indices
     country_groups: dict[str, dict[int, list[int]]] = defaultdict(
@@ -556,66 +563,28 @@ def resolve_entities(records: list[dict]) -> dict[int, str]:
     # Assign stable IDs sorted by the earliest-appearing member index per group
     id_map: dict[int, str] = {}
     for country in sorted(country_groups.keys()):
-        # Sort groups by minimum record index so ordering is deterministic
         groups = sorted(country_groups[country].values(), key=min)
         for n, members in enumerate(groups, 1):
-            cid = f"{country}_{n:03d}"
+            cid = id_format.format(country=country, n=n)
             for i in members:
                 id_map[i] = cid
 
     return id_map
 
 
+def resolve_entities(records: list[dict]) -> dict[int, str]:
+    """Assign a canonical_facility_id to each A1 research facility record."""
+    return _resolve_entities_core(
+        records, id_format="{country}_{n:03d}", anchor_merges=ANCHOR_MERGES,
+    )
+
+
 # ── Vaccine entity resolution ─────────────────────────────────────────────────
 
 
 def resolve_vaccine_entities(records: list[dict]) -> dict[int, str]:
-    """
-    Assign a canonical_vaccine_facility_id to each vaccine facility record.
-
-    Mirrors resolve_entities() for Form A1, using the same thresholds:
-    - SIMILARITY_THRESHOLD (85) for cross-year name matching
-    - SAME_YEAR_THRESHOLD (95) for within-year matching (same CBM submission)
-
-    Returns a dict: record_index → canonical_vaccine_facility_id (e.g. "GBR_V001").
-    """
-    by_country: dict[str, list[int]] = defaultdict(list)
-    for i, rec in enumerate(records):
-        country = (rec.get("extraction_metadata") or {}).get("country_iso3", "UNK")
-        by_country[country].append(i)
-
-    uf = UnionFind()
-
-    for indices in by_country.values():
-        names = [(i, records[i].get("facility_name") or "") for i in indices]
-        for a in range(len(names)):
-            for b in range(a + 1, len(names)):
-                ia, na = names[a]
-                ib, nb = names[b]
-                if not na or not nb:
-                    continue
-                ya = (records[ia].get("extraction_metadata") or {}).get("year")
-                yb = (records[ib].get("extraction_metadata") or {}).get("year")
-                threshold = SAME_YEAR_THRESHOLD if (ya and yb and ya == yb) else SIMILARITY_THRESHOLD
-                if fuzz.token_sort_ratio(na, nb) >= threshold:
-                    uf.union(ia, ib)
-
-    country_groups: dict[str, dict[int, list[int]]] = defaultdict(
-        lambda: defaultdict(list)
-    )
-    for country, indices in by_country.items():
-        for i in indices:
-            country_groups[country][uf.find(i)].append(i)
-
-    id_map: dict[int, str] = {}
-    for country in sorted(country_groups.keys()):
-        groups = sorted(country_groups[country].values(), key=min)
-        for n, members in enumerate(groups, 1):
-            vid = f"{country}_V{n:03d}"
-            for i in members:
-                id_map[i] = vid
-
-    return id_map
+    """Assign a canonical_vaccine_facility_id to each Form G vaccine record."""
+    return _resolve_entities_core(records, id_format="{country}_V{n:03d}")
 
 
 def build_vaccine_entity_registry(
@@ -662,49 +631,8 @@ def build_vaccine_entity_registry(
 
 
 def resolve_defence_facility_entities(records: list[dict]) -> dict[int, str]:
-    """
-    Assign a canonical_defence_facility_id to each defence facility record.
-
-    Mirrors resolve_vaccine_entities() using the same Union-Find thresholds.
-    Returns a dict: record_index → canonical_defence_facility_id (e.g. "DEU_D001").
-    """
-    by_country: dict[str, list[int]] = defaultdict(list)
-    for i, rec in enumerate(records):
-        country = (rec.get("extraction_metadata") or {}).get("country_iso3", "UNK")
-        by_country[country].append(i)
-
-    uf = UnionFind()
-
-    for indices in by_country.values():
-        names = [(i, records[i].get("facility_name") or "") for i in indices]
-        for a in range(len(names)):
-            for b in range(a + 1, len(names)):
-                ia, na = names[a]
-                ib, nb = names[b]
-                if not na or not nb:
-                    continue
-                ya = (records[ia].get("extraction_metadata") or {}).get("year")
-                yb = (records[ib].get("extraction_metadata") or {}).get("year")
-                threshold = SAME_YEAR_THRESHOLD if (ya and yb and ya == yb) else SIMILARITY_THRESHOLD
-                if fuzz.token_sort_ratio(na, nb) >= threshold:
-                    uf.union(ia, ib)
-
-    country_groups: dict[str, dict[int, list[int]]] = defaultdict(
-        lambda: defaultdict(list)
-    )
-    for country, indices in by_country.items():
-        for i in indices:
-            country_groups[country][uf.find(i)].append(i)
-
-    id_map: dict[int, str] = {}
-    for country in sorted(country_groups.keys()):
-        groups = sorted(country_groups[country].values(), key=min)
-        for n, members in enumerate(groups, 1):
-            did = f"{country}_D{n:03d}"
-            for i in members:
-                id_map[i] = did
-
-    return id_map
+    """Assign a canonical_defence_facility_id to each A2 defence facility record."""
+    return _resolve_entities_core(records, id_format="{country}_D{n:03d}")
 
 
 def build_defence_entity_registry(

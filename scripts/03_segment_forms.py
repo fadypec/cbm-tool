@@ -50,7 +50,7 @@ SEGMENTED_DIR = PROJECT_ROOT / "data" / "segmented"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MODEL = "claude-sonnet-4-20250514"
+from model_config import MODEL
 REGEX_MIN_FORMS = 2          # fall back to LLM if fewer than this many forms found
 NTD_MAX_CHARS = 2000         # forms shorter than this may be "nothing to declare"
 
@@ -447,9 +447,11 @@ def process_entry(
     client: anthropic.Anthropic | None,
     *,
     dry_run: bool,
+    force: bool = False,
 ) -> dict:
     """
     Segment one document.  Returns a result dict with stats for the summary.
+    Skips entries whose segmented output directory already exists unless *force* is True.
     """
     entry_id = entry["id"]
     txt_path = EXTRACTED_DIR / f"{entry_id}.txt"
@@ -457,6 +459,11 @@ def process_entry(
     if not txt_path.exists():
         log.warning("[%s] No extracted text file found — skipping", entry_id)
         return {"id": entry_id, "status": "missing_txt"}
+
+    # Skip if already segmented (incremental mode)
+    seg_dir = SEGMENTED_DIR / entry_id
+    if not force and not dry_run and seg_dir.exists() and any(seg_dir.iterdir()):
+        return {"id": entry_id, "status": "skipped"}
 
     text = txt_path.read_text(encoding="utf-8")
     pages = split_pages(text)
@@ -545,6 +552,11 @@ def main() -> None:
         action="store_true",
         help="Parse and log results without writing any files.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-segment even if output already exists (override incremental skip).",
+    )
     args = parser.parse_args()
 
     if not CATALOGUE_PATH.exists():
@@ -579,21 +591,24 @@ def main() -> None:
 
     results: list[dict] = []
     for entry in targets:
-        result = process_entry(entry, client, dry_run=args.dry_run)
+        result = process_entry(entry, client, dry_run=args.dry_run, force=args.force)
         results.append(result)
 
     # ── Summary ───────────────────────────────────────────────────────────────
     ok = [r for r in results if r.get("status") == "ok"]
+    n_skipped = sum(1 for r in results if r.get("status") == "skipped")
     n_regex = sum(1 for r in ok if r.get("method") == "regex")
     n_llm = sum(1 for r in ok if r.get("method") == "llm")
-    n_failed = len(results) - len(ok)
+    n_failed = len(results) - len(ok) - n_skipped
 
     print("\n── Summary ──────────────────────────────────────────────────")
     print(f"  Documents segmented:    {len(ok)}")
     print(f"    via regex:            {n_regex}")
     print(f"    via LLM fallback:     {n_llm}")
+    if n_skipped:
+        print(f"  Already done (skipped): {n_skipped}")
     if n_failed:
-        print(f"  Failed / skipped:       {n_failed}")
+        print(f"  Failed:                 {n_failed}")
     if ok:
         all_forms: list[str] = []
         for r in ok:

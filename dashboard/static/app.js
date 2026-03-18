@@ -406,6 +406,8 @@ function buildPopup(layer, feature) {
 
     const historyLink = layer === 'A1'
         ? `<br><a class="popup-link" href="#" data-action="show-entity" data-entity-id="${esc(p.id)}">Full history →</a>`
+        : layer === 'G'
+        ? `<br><a class="popup-link" href="#" data-action="show-vaccine-entity" data-entity-id="${esc(p.id)}">Full history →</a>`
         : '';
 
     // FEATURE 2: agents preview line in popup (A1 only)
@@ -858,7 +860,9 @@ async function onChoroFormChange() {
     try {
         const newRates = await api(`/api/map/compliance/${choroForm}`);
         const rateMap = {};
-        newRates.forEach(c => { rateMap[c.country_iso3] = c; });
+        // The form-specific endpoint returns 'rate'; normalize to 'a1_rate'
+        // so the rest of the UI (choropleth, subtitle, global table) works uniformly
+        newRates.forEach(c => { c.a1_rate = c.rate ?? c.a1_rate; rateMap[c.country_iso3] = c; });
         // Update the global complianceRates (used by choropleth click handlers and subtitle)
         Object.assign(complianceRates, rateMap);
         updateChoropleth(rateMap);
@@ -1318,6 +1322,56 @@ function renderDefenceEntityModal(data) {
     document.getElementById('modal-body').innerHTML = html;
 }
 
+// ── Vaccine entity modal ─────────────────────────────────────────────────────
+
+async function showVaccineEntityModal(entityId) {
+    map.closePopup();
+    document.getElementById('modal-title').textContent = 'Loading…';
+    document.getElementById('modal-body').innerHTML = '<div class="text-center py-4 text-muted">Loading…</div>';
+    entityModal.show();
+    try {
+        const data = await api(`/api/entity/vaccine/${entityId}`);
+        renderVaccineEntityModal(data);
+    } catch (e) {
+        document.getElementById('modal-body').innerHTML =
+            `<div class="text-center py-4 text-danger">Failed to load vaccine facility: ${esc(String(e))}</div>`;
+    }
+}
+
+function renderVaccineEntityModal(data) {
+    document.getElementById('modal-title').textContent =
+        data.canonical_name || '[Unnamed vaccine facility]';
+
+    const yr = data.year_records || [];
+    const header = `<div class="em-header">
+        <div class="em-country">${esc(data.country_name || data.country_iso3)}</div>
+        <div class="em-meta">${yr.length} year record${yr.length !== 1 ? 's' : ''}
+            &nbsp;·&nbsp; ${data.first_year || '?'}–${data.last_year || '?'}</div>
+    </div>`;
+
+    const recordsHtml = yr.map(rec => {
+        const kvs = [
+            ['Facility name',    rec.facility_name],
+            ['City',             rec.city],
+            ['Address',          rec.address],
+            ['Diseases covered', rec.diseases_covered],
+            ['Vaccines',         rec.vaccines_summary],
+        ].filter(([, v]) => v);
+        return `
+            <div class="year-record">
+                <div class="yr-head">${rec.year}
+                    ${rec.source_url
+                        ? `<a href="${esc(rec.source_url)}" target="_blank" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
+                        : `<small class="text-muted fw-normal ms-2">${esc(rec.document_id)}</small>`}
+                    ${rec.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(rec.confidence * 100)}%</small>` : ''}
+                </div>
+                <dl class="yr-kv">${kvs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join('')}</dl>
+            </div>`;
+    }).join('') || '<div class="text-muted">No year records found.</div>';
+
+    document.getElementById('modal-body').innerHTML = header + recordsHtml;
+}
+
 async function loadVaccineTab(iso3) {
     const el = document.getElementById('vaccine-content');
     try {
@@ -1334,9 +1388,9 @@ async function loadVaccineTab(iso3) {
                     ? `${Math.min(...years)}–${Math.max(...years)}`
                     : (vf.first_year ? `${vf.first_year}–${vf.last_year}` : '');
                 const diseases = recs.find(r => r.diseases_covered)?.diseases_covered || '';
-                return `<div class="vac-item">
-                    <div class="vac-name">${esc(vf.canonical_name || '[Unnamed]')}</div>
-                    <div class="vac-meta">${yStr}${diseases ? ' · ' + esc(diseases.slice(0,60)) : ''}</div>
+                return `<div class="fac-item" data-action="show-vaccine-entity" data-entity-id="${esc(vf.canonical_id)}"
+                    ><div class="fac-name">${esc(vf.canonical_name || '[Unnamed]')}</div>
+                    <div class="fac-meta">${yStr}${diseases ? ' · ' + esc(diseases.slice(0,60)) : ''}</div>
                 </div>`;
             }).join('');
     } catch (e) {
@@ -1362,8 +1416,6 @@ async function loadLegislationTab(iso3) {
             ['biosafety',    'Biosafety'],
         ];
         const flds = ['legislation', 'regulations', 'other_measures'];
-        // Show most recent year only by default; user can see all years
-        const latest = data[0];
         let html = `<div style="padding:8px 16px 4px;color:#4a5280;font-size:10px;font-weight:700;letter-spacing:0.08em">FORM E — ${data.length} YEAR${data.length !== 1 ? 'S' : ''}</div>`;
         data.forEach(rec => {
             const laws = rec.key_laws && Array.isArray(rec.key_laws) ? rec.key_laws : [];
@@ -1514,6 +1566,11 @@ function switchEntityTab(btn, tab) {
         const el = body.querySelector(`#${id}`);
         if (el) el.style.display = key === tab ? '' : 'none';
     });
+    // Attach hover listeners once the timeline SVG is visible
+    if (tab === 'timeline') {
+        const tlPanel = body.querySelector('#em-timeline-panel');
+        if (tlPanel) initTimelineHover(tlPanel);
+    }
 }
 
 // ── Search ─────────────────────────────────────────────────────────────────
@@ -1564,9 +1621,13 @@ function initSearch() {
         }
     });
 
-    input.addEventListener('blur', () =>
-        setTimeout(() => results.classList.remove('open'), 200)
-    );
+    // Close dropdown on clicks outside — mousedown fires before blur, so result
+    // clicks still register.  This avoids the fragile 200ms setTimeout approach.
+    document.addEventListener('mousedown', e => {
+        if (!results.contains(e.target) && e.target !== input) {
+            results.classList.remove('open');
+        }
+    });
 
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape') { results.classList.remove('open'); input.blur(); }
@@ -2530,8 +2591,6 @@ function setupTrendsChartHover(d, container) {
 
 // ── BSL-4 capacity chart ─────────────────────────────────────────────────────
 
-let _trendsCapacityData = null;  // cached raw rows
-
 async function loadBsl4Capacity() {
     const panel = document.getElementById('trends-capacity-panel');
     if (!panel) return;
@@ -2693,18 +2752,19 @@ function renderComparison(a, b) {
     const bsl4Count = d => d.facilities.filter(f => (f.latest_containment || '').includes('4')).length;
     const bsl3Count = d => d.facilities.filter(f => (f.latest_containment || '').includes('3')).length;
 
-    // Unique organism terms from all facilities' agents_summary (top 5)
+    // Extract organism names from agents_summary.  Split on semicolons/commas
+    // first (these delimit distinct organisms), then keep terms that look like
+    // scientific or common names rather than single short words.
     const organisms = d => {
-        const words = new Set();
+        const terms = new Set();
         d.facilities.forEach(f => {
             if (!f.agents_summary) return;
-            // Extract short parenthetical words of interest (simple split)
-            f.agents_summary.split(/[,;\/\s]+/).forEach(w => {
-                const t = w.trim().toLowerCase();
-                if (t.length > 4) words.add(t.charAt(0).toUpperCase() + t.slice(1));
+            f.agents_summary.split(/[;,\/]/).forEach(part => {
+                const t = part.trim();
+                if (t.length > 3) terms.add(t);
             });
         });
-        return [...words].slice(0, 12).join(', ');
+        return [...terms].slice(0, 12).join('; ');
     };
 
     const years = d => {
@@ -3054,6 +3114,9 @@ function initEventDelegation() {
                 break;
             case 'show-defence-entity':
                 showDefenceEntityModal(el.dataset.entityId);
+                break;
+            case 'show-vaccine-entity':
+                showVaccineEntityModal(el.dataset.entityId);
                 break;
             case 'select-search-result':
                 selectSearchResult(el.dataset.entityId, el.dataset.iso3, el.dataset.layer);

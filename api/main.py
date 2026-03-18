@@ -13,6 +13,7 @@ Then open http://localhost:8000 in a browser.
 
 from __future__ import annotations
 
+import datetime
 import decimal
 import json
 import os
@@ -445,6 +446,44 @@ def api_defence_entity(entity_id: str):
     return _json(entity)
 
 
+# ── /api/entity/vaccine/{id} ─────────────────────────────────────────────────
+
+@app.get("/api/entity/vaccine/{entity_id}", summary="Full history for one canonical vaccine facility")
+def api_vaccine_entity(entity_id: str):
+    with cursor() as cur:
+        cur.execute("""
+            SELECT
+                vf.id              AS canonical_vaccine_facility_id,
+                vf.canonical_name,
+                vf.country_iso3,
+                vf.first_year,
+                vf.last_year,
+                (SELECT d.country_name FROM documents d
+                 WHERE  d.country_iso3 = vf.country_iso3
+                 AND    d.country_name IS NOT NULL LIMIT 1) AS country_name
+            FROM vaccine_facilities vf
+            WHERE vf.id = %s
+        """, (entity_id,))
+        entity = cur.fetchone()
+        if not entity:
+            raise HTTPException(status_code=404, detail=f"Vaccine entity '{entity_id}' not found")
+        entity = dict(entity)
+
+        cur.execute("""
+            SELECT vfy.year, vfy.document_id,
+                   vfy.facility_name, vfy.city, vfy.address,
+                   vfy.diseases_covered, vfy.vaccines_summary,
+                   vfy.confidence, d.source_url
+            FROM vaccine_facility_years vfy
+            JOIN documents d ON d.id = vfy.document_id
+            WHERE vfy.canonical_vaccine_facility_id = %s
+            ORDER BY vfy.year DESC
+        """, (entity_id,))
+        entity["year_records"] = [dict(r) for r in cur.fetchall()]
+
+    return _json(entity)
+
+
 # ── /api/country/{iso3}/vaccine ───────────────────────────────────────────────
 
 @app.get("/api/country/{iso3}/vaccine", summary="Vaccine facilities for one country")
@@ -479,26 +518,23 @@ def api_country_legislation(iso3: str):
     iso3 = iso3.upper()
     with cursor() as cur:
         cur.execute("""
-            SELECT year,
-                   prohibitions_legislation, prohibitions_regulations,
-                   prohibitions_other_measures, prohibitions_amended,
-                   exports_legislation, exports_regulations,
-                   exports_other_measures, exports_amended,
-                   imports_legislation, imports_regulations,
-                   imports_other_measures, imports_amended,
-                   biosafety_legislation, biosafety_regulations,
-                   biosafety_other_measures, biosafety_amended,
-                   key_laws, notes, confidence, document_id
-            FROM legislation
-            WHERE country_iso3 = %s
-            ORDER BY year DESC
+            SELECT l.year,
+                   l.prohibitions_legislation, l.prohibitions_regulations,
+                   l.prohibitions_other_measures, l.prohibitions_amended,
+                   l.exports_legislation, l.exports_regulations,
+                   l.exports_other_measures, l.exports_amended,
+                   l.imports_legislation, l.imports_regulations,
+                   l.imports_other_measures, l.imports_amended,
+                   l.biosafety_legislation, l.biosafety_regulations,
+                   l.biosafety_other_measures, l.biosafety_amended,
+                   l.key_laws, l.notes, l.confidence, l.document_id,
+                   d.source_url
+            FROM legislation l
+            JOIN documents d ON d.id = l.document_id
+            WHERE l.country_iso3 = %s
+            ORDER BY l.year DESC
         """, (iso3,))
         records = [dict(r) for r in cur.fetchall()]
-        # Attach source URL
-        for rec in records:
-            cur.execute("SELECT source_url FROM documents WHERE id = %s", (rec["document_id"],))
-            row = cur.fetchone()
-            rec["source_url"] = row["source_url"] if row else None
 
     return _json(records)
 
@@ -510,19 +546,17 @@ def api_country_past_programmes(iso3: str):
     iso3 = iso3.upper()
     with cursor() as cur:
         cur.execute("""
-            SELECT year, convention_entry_date,
-                   has_offensive_programme, offensive_period, offensive_summary,
-                   has_defensive_programme, defensive_period, defensive_summary,
-                   confidence, notes, document_id
-            FROM past_programmes
-            WHERE country_iso3 = %s
-            ORDER BY year DESC
+            SELECT pp.year, pp.convention_entry_date,
+                   pp.has_offensive_programme, pp.offensive_period, pp.offensive_summary,
+                   pp.has_defensive_programme, pp.defensive_period, pp.defensive_summary,
+                   pp.confidence, pp.notes, pp.document_id,
+                   d.source_url
+            FROM past_programmes pp
+            JOIN documents d ON d.id = pp.document_id
+            WHERE pp.country_iso3 = %s
+            ORDER BY pp.year DESC
         """, (iso3,))
         records = [dict(r) for r in cur.fetchall()]
-        for rec in records:
-            cur.execute("SELECT source_url FROM documents WHERE id = %s", (rec["document_id"],))
-            row = cur.fetchone()
-            rec["source_url"] = row["source_url"] if row else None
 
     return _json(records)
 
@@ -841,7 +875,12 @@ VALID_FORMS = {"A1", "A2", "B", "C", "E", "F", "G"}
 
 @app.get("/api/map/compliance/{form}", summary="Per-country compliance rate for a given form")
 def api_map_compliance_form(form: str):
-    """Returns per-country submission rate for any CBM form (A1, A2, B, C, E, F, G)."""
+    """Returns per-country submission rate for any CBM form (A1, A2, B, C, E, F, G).
+
+    Note: the response uses a generic ``rate`` field regardless of which form is
+    queried.  The default ``/api/map/compliance`` endpoint (no form suffix)
+    returns ``a1_rate`` for backward compatibility with the choropleth code.
+    """
     form = form.upper()
     if form not in VALID_FORMS:
         raise HTTPException(status_code=400, detail=f"Invalid form '{form}'. Must be one of: {sorted(VALID_FORMS)}")
@@ -854,7 +893,7 @@ def api_map_compliance_form(form: str):
                 ROUND(
                     COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.id END)::numeric
                     / NULLIF(COUNT(DISTINCT d.id), 0), 3
-                )                    AS a1_rate
+                )                    AS rate
             FROM documents d
             LEFT JOIN form_compliance fc ON fc.document_id = d.id AND fc.form = %s
             WHERE NOT d.is_amendment
@@ -1300,7 +1339,7 @@ def api_transparency(request: Request):
     Distinguishes procedural compliance ("nothing to declare" every year) from
     substantive transparency (detailed facility declarations with consistent reporting).
     """
-    current_year = 2026  # anchored to dataset; update when new data arrives
+    current_year = datetime.date.today().year
     with cursor() as cur:
         cur.execute("""
             WITH submission_stats AS (
