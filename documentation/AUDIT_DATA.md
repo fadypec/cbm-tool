@@ -1,77 +1,44 @@
 # CBM Tool — Data Quality Audit
 
 **Date:** 2026-03-17
+**Last updated:** 2026-03-18
 **Scope:** Entity resolution, extraction anomalies, OCR artifacts, geocoding gaps
 
 This document extends VALIDATION_CHECKLIST.md with additional findings from systematic analysis.
+Completed items have been removed; only outstanding work remains.
 
 ---
 
 ## 1. Entity Resolution Failures
 
-### 1A. GBR: 31 entities should be ~10 (CRITICAL)
-
-The UK's serial renaming of agencies (HPA -> PHE -> UKHSA) combined with fuzzy matching failures creates ~21 excess entities. **The dedup_entities.py script contains zero GBR merge groups.** This is the single largest entity resolution failure in the dataset.
-
-| Canonical facility | Entity IDs to merge |
-|---|---|
-| Porton Down (HPA/PHE/UKHSA Centre for Emergency Preparedness) | GBR_001, GBR_006, GBR_019, GBR_026, GBR_030 |
-| Colindale (HPA/PHE/UKHSA Centre for Infections) | GBR_002, GBR_005, GBR_018, GBR_027, GBR_028 |
-| Dstl Porton Down (Defence Science & Technology Laboratory) | GBR_004, GBR_013 |
-| VLA / AHVLA / APHA (Animal Health) | GBR_008, GBR_015, GBR_020 |
-| IAH / Pirbright Institute | GBR_009, GBR_014, GBR_017 |
-| Merial / Boehringer Ingelheim (Pirbright site) | GBR_010, GBR_016, GBR_023, GBR_024 |
-| NIMR / Francis Crick Institute | GBR_007, GBR_021, GBR_022 |
-| NIBSC / MHRA (South Mimms) | GBR_003, GBR_029, GBR_031 |
-| Schering-Plough / Intervet (Upper Hale) | GBR_011, GBR_012 |
-
-**Note:** This confirms the user's suspicion about HPA/PHE/UKHSA being treated as multiple entities.
-
-### 1B. AUS: AAHL/ACDP not merged (HIGH)
-
-AUS_001 (Australian Animal Health Laboratory, 2006-2020) and AUS_005 (Australian Centre for Disease Preparedness, 2021-2025) are the **same physical facility** at the same address. CSIRO renamed it in 2020. Treated as 2 separate entities.
-
-### 1C. DNK: 21 entities for what is likely 1 facility (MEDIUM)
-
-Denmark has 14 null-named entities (DNK_008 through DNK_021), each appearing in exactly 1 year. These appear to be the same unnamed facility declared annually from 2012-2025, getting a new canonical ID each time because entity resolution cannot match NULL names.
-
-### 1D. CYP: 7 entities for 7 records, all unnamed (MEDIUM)
-
-Same pattern as Denmark. Cyprus declares 1 unnamed facility each year (2019-2025).
-
-### 1E. SVK: 5 null-named entities (2018-2024), each single-year (MEDIUM)
-
-Same pattern as Denmark/Cyprus.
-
-### 1F. Defence entity fragmentation is severe (HIGH)
+### 1F. Defence entity fragmentation is severe (HIGH) — PENDING
 
 - **CHE:** 40 defence entities — many are German/French/English name variants of the same 4 facilities
 - **CAN:** 9 defence entities — DRDC Suffield and Valcartier each appear as ~5 entities
 - **BEL:** 12 defence entities — CTMA/DLD-Bio appears as ~7 entities
 - **USA:** 63 defence entities — Edgewood Chemical Biological Center split into USA_D004 and USA_D008
 
-### 1G. Vaccine entity fragmentation: BGR BulBio (MEDIUM)
-
-Bulgaria's BulBio-NCIPD vaccine facility at 26 Yanko Sakazov Blvd, Sofia appears as 6 separate canonical entities (BGR_V001 through BGR_V006) due to minor spelling variations.
-
-### 1H. CHE/USA/UKR/DEU dedup script exists but effects don't persist (HIGH)
-
-`dedup_entities.py` defines 7 merge groups (CHE, USA, UKR, DEU) that operate on the PostgreSQL `facilities` table. However, `06_load_database.py` reloads from the undeduped CSV/JSON outputs every time. The dedup must be re-applied after every database reload, and there is no automation for this. The annual_update.sh script does not call `dedup_entities.py`.
+Fix: extend `dedup_entities.py` with `DEFENCE_MERGES` list and handlers for
+`defence_entities` / `defence_facilities` tables. Requires verifying canonical IDs
+in the current DB state before adding merge groups.
 
 ---
 
-## 2. Anomalous BSL Areas (Beyond VALIDATION_CHECKLIST.md)
+## 2. Anomalous BSL Areas
 
-### 2A. AUS AAHL: 11,000 m2 BSL-4 in 2006-2009, then 567 m2 from 2012 (HIGH)
+### 2A. AUS AAHL: 11,000 m² BSL-4 in 2006–2009, then 567 m² from 2012 (HIGH)
 
-The 11,000 m2 figure is almost certainly total facility floor area misattributed to BSL-4 containment. The actual BSL-4 area is 567 m2 (consistent 2012 onwards). This inflates aggregate BSL-4 capacity by ~20x for those years.
+The 11,000 m² figure is almost certainly total facility floor area misattributed to BSL-4
+containment. Inflates aggregate BSL-4 capacity by ~20x for those years.
 
-### 2B. Consistency check: all BSL-4 areas > 5,000 m2
+**Action:** Open any 2010–2015 AUS CBM. Verify field 5 for AAHL. If confirmed wrong,
+manually UPDATE the `facility_years` rows for `AUS_001` years 2006–2009.
 
-Review these against source documents:
-- USA Plum Island: 17,643 m2 BSL-3 (2010-2011) — likely total lab area
-- AUS AAHL: 11,000 m2 BSL-4 (2006-2009) — likely total facility area
-- CIV CEPRIS: 1,000 m2 BSL-4 (2025) — likely incorrect BSL level
+### 2B. Consistency check: BSL-4 areas > 5,000 m² (LOW)
+
+- USA Plum Island: 17,643 m² BSL-3 (2010–2011) — likely total lab area (see VALIDATION_CHECKLIST §A)
+- AUS AAHL: 11,000 m² BSL-4 (2006–2009) — see §2A above
+- CIV CEPRIS: 1,000 m² BSL-4 (2025) — likely incorrect BSL level (see VALIDATION_CHECKLIST §B)
 
 ---
 
@@ -79,67 +46,66 @@ Review these against source documents:
 
 ### 3A. PRT_003: Zero-confidence ghost record (HIGH)
 
-Portugal 2011 has a facility_years record with:
-- confidence = 0.000
-- No facility name
-- No address
-- No city
-- containment = unknown
+Portugal 2011 has a `facility_years` record with confidence = 0.000, no facility name,
+no address, no city, and unknown containment. Likely an extraction artifact.
 
-This is an extraction artifact. The record contains zero usable data.
+**Action:** Open the 2011 Portugal CBM (https://bwc-cbm.un.org/report/detail/9718).
+If Form A Part 1 is blank or "nothing to declare", delete this `facility_years` row.
+See also VALIDATION_CHECKLIST §H.
 
-### 3B. Three defence facility records with confidence < 0.4 (LOW)
+### 3B. Defence facility records with confidence < 0.4 (LOW)
 
-- BEL_D009 (LORARC, 2017, conf=0.3) — work_description may describe a different facility
+- BEL_D009 (LORARC, 2017, conf=0.3)
 - TLS 2025 (conf=0.3)
 
-### 3C. 18 records with confidence < 0.5 (1.1% of dataset) (LOW)
+### 3C. 18 records with confidence < 0.5 (LOW)
 
-These should be spot-checked against source PDFs.
+Spot-check against source PDFs.
 
 ---
 
 ## 4. Legislation Data Quality
 
-### 4A. 14 AUT legislation rows marked "substantive" but have ALL NULL booleans (MEDIUM)
+### 4A. 14 AUT legislation rows: substantive status but ALL NULL booleans (MEDIUM)
 
-For AUT years 2009-2012, 2015, 2017-2025, the compliance says Form E is "substantive" but every boolean in the legislation table is NULL. Notes say these are blank templates or illegible fax transmissions. The compliance status should be "limited" or "absent".
+For AUT years 2009–2012, 2015, 2017–2025, `form_compliance` shows Form E as "substantive"
+but every boolean in the `legislation` table is NULL. These appear to be blank templates
+or illegible fax transmissions.
+
+**Action:** Determine correct status ("absent" is the most defensible). Update
+`form_compliance` for these rows via a new SQL migration.
 
 ### 4B. 40 legislation records (12%) with ALL NULL booleans (MEDIUM)
 
-Beyond AUT: CZE, DEU, HRV, JPN, and others have legislation rows where the LLM couldn't extract any Yes/No data. These rows add noise without signal.
+Beyond AUT: CZE, DEU, HRV, JPN, and others. These rows add noise without signal.
 
 ---
 
 ## 5. Unnamed Facility Patterns
 
-### 5A. 38 entities (8.3%) are unnamed/null
-
-Countries with genuinely unnamed facilities (confirmed correct):
-- DNK (2012-2025): unnamed but should be merged into 1 entity
-- CYP (2019-2025): unnamed but should be merged into 1 entity
-- SVN (2014-2020): unnamed, correct
-- SVK (2018-2024): unnamed but should be merged into 1 entity
-
-### 5B. 236 facility-year records (15%) have no address AND no city
+### 5B. 236 facility-year records (15%) have no address AND no city (LOW)
 
 Ungeocodeable. Concentrated in CHE (multilingual forms), DNK (unnamed), SVK, CYP, SVN.
 
 ---
 
-## 6. Geocoding Gaps (Extending VALIDATION_CHECKLIST.md)
+## 6. Geocoding Gaps
 
-### 6A. Estonia: 82.9% missing from map (58/70 facility-years)
+### 6A. Estonia: 82.9% missing from map (58/70 facility-years) (MEDIUM)
 
-Estonian CBMs give institution names rather than street addresses. Manual geocoding of 5-10 institutions would fix this.
+Estonian CBMs give institution names rather than street addresses. Manual geocoding of
+5–10 institutions would fix this. See VALIDATION_CHECKLIST §N.
 
-### 6B. Mexico: 59.7% missing from map (77/129 facility-years)
+### 6B. Mexico: 59.7% missing from map (77/129 facility-years) (MEDIUM)
 
 Likely address formatting issue. Spot-check MEX records for address field content.
+See VALIDATION_CHECKLIST §O.
 
-### 6C. AUS QHFSS: Coordinate jump in 2024
+### 6C. AUS QHFSS: Coordinate jump in 2024 (LOW)
 
-Brisbane (2006-2023) to Canberra (2024). The facility did not move. Likely a head-office address in the 2024 CBM.
+Brisbane (2006–2023) → Canberra (2024). Facility did not move.
+**Action:** UPDATE `facility_years` geom for AUS_003 year=2024 to Brisbane coordinates
+(−27.56°, 153.04°). See VALIDATION_CHECKLIST §P.
 
 ---
 
@@ -147,11 +113,8 @@ Brisbane (2006-2023) to Canberra (2024). The facility did not move. Likely a hea
 
 ### 7A. Year 2026 data present (LOW)
 
-BLZ and TUV have 2026 records. These are CBM submissions for calendar year 2025 that use 2026 reporting dates. Not a bug but creates confusion in year filtering.
-
-### 7B. 16-year gap in coverage (1991-2005)
-
-Records exist for 1988-1990 and 2006-2026. Reflects the available corpus (pre-2000 scans + 2006+ digital), not a pipeline error.
+BLZ and TUV have 2026 records (CBM submissions for calendar year 2025 with 2026 reporting
+dates). Not a bug but creates confusion in year filtering.
 
 ---
 
@@ -159,23 +122,12 @@ Records exist for 1988-1990 and 2006-2026. Reflects the available corpus (pre-20
 
 ### 8A. Non-standard containment values (LOW)
 
-`BSL-2+`, `BSL-3+`, `Enhanced BSL-2` are real values from submissions but fall into the "unknown" bucket in the dashboard's BSL color mapping. Consider normalizing or adding explicit support.
+`BSL-2+`, `BSL-3+`, `Enhanced BSL-2` fall into the "unknown" bucket in the dashboard's
+BSL colour mapping. Consider normalising or adding explicit support.
 
 ### 8B. 37 records have has_bsl4=True but bsl4_area_m2=NULL (LOW)
 
-Common for CHE and older AUS submissions where BSL-4 is confirmed but area not specified. Not wrong, but limits area analysis.
-
----
-
-## 9. Non-Standard Data Patterns
-
-### 9A. JPN Murayama intermittent BSL-4 area (from VALIDATION_CHECKLIST)
-
-Same 2,270 m2 figure alternates between BSL-3 and BSL-4 across years. Likely represents total high-containment area.
-
-### 9B. DEU FLI containment gap then jump (from VALIDATION_CHECKLIST)
-
-2014-2017 gap in BSL-4, then jump to 1,251 m2 in 2023. Reflects real facility expansion (new building 2013-2020).
+Common for CHE and older AUS submissions. Not wrong, but limits area analysis.
 
 ---
 
@@ -183,15 +135,18 @@ Same 2,270 m2 figure alternates between BSL-3 and BSL-4 across years. Likely rep
 
 | Priority | Action | Records affected | Effort |
 |----------|--------|-----------------|--------|
-| 1 | Add GBR merge groups to dedup_entities.py | ~31 entities → ~10 | 1 hr |
-| 2 | Merge AUS_001/AUS_005 (AAHL/ACDP) | 2 entities → 1 | 15 min |
-| 3 | Merge DNK/CYP/SVK unnamed single-year entities | ~26 entities → 3 | 30 min |
-| 4 | Fix AUS AAHL BSL-4 area 11,000 → verify/correct | 4 year-records | 15 min |
-| 5 | Delete PRT_003 ghost record | 1 record | 5 min |
-| 6 | Integrate dedup_entities.py into annual_update.sh | All entities | 15 min |
-| 7 | Add defence entity merge groups (CHE, CAN, BEL) | ~60 excess entities | 2 hrs |
-| 8 | Fix AUT legislation compliance status | 14 rows | 30 min |
-| 9 | Manual geocoding for top 5 EST institutions | ~58 records | 30 min |
-| 10 | Correct AUS QHFSS 2024 coordinates | 1 record | 5 min |
+| 1 | Verify + fix AUS AAHL 11,000 m² BSL-4 (§2A) | 4 year-records | 15 min + PDF |
+| 2 | Delete PRT_003 ghost record (§3A) | 1 record | 5 min + PDF |
+| 3 | Fix AUT legislation compliance status (§4A) | 14 rows | 30 min |
+| 4 | Add defence entity merge groups — CHE, CAN, BEL, USA (§1F) | ~60 entities | 2 hrs |
+| 5 | Manual geocoding for top 5 EST institutions (§6A) | ~58 records | 30 min |
+| 6 | Correct AUS QHFSS 2024 coordinates (§6C) | 1 record | 5 min |
+| 7 | Investigate MEX geocoding gaps (§6B) | ~77 records | 30 min |
 
-**Estimated true unique facilities after dedup: ~390-400** (vs current claim of ~457)
+## Completed (removed from above)
+
+- ✅ GBR merge groups (31 → 13 entities) — 2026-03-18
+- ✅ AUS_001/AUS_005 AAHL→ACDP merge — 2026-03-18
+- ✅ DNK/CYP/SVK unnamed single-year entity merges — 2026-03-18
+- ✅ BGR vaccine BulBio entity merge (6 → 1) — 2026-03-18
+- ✅ dedup_entities.py integrated into annual_update.sh — prior session
