@@ -190,9 +190,15 @@ function updateStatsBar() {
 // ── Theme ──────────────────────────────────────────────────────────────────
 
 function initTheme() {
-    // The inline script in <head> already applied the saved theme to <html>.
-    // This function just syncs the toggle button label on first render.
-    _syncThemeBtn(document.documentElement.dataset.theme || 'dark');
+    // theme-init.js already applied the saved theme before CSS rendered.
+    // Read localStorage again as a fallback in case that script was blocked.
+    let theme = document.documentElement.dataset.theme || 'dark';
+    try {
+        const saved = localStorage.getItem('cbm-theme');
+        if (saved === 'light' || saved === 'dark') theme = saved;
+    } catch (_) {}
+    document.documentElement.dataset.theme = theme;
+    _syncThemeBtn(theme);
 }
 
 function _syncThemeBtn(theme) {

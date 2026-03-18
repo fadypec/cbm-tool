@@ -195,11 +195,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "frame-ancestors 'none';"
         )
 
-        # Cache static assets for 1 hour; the browser will revalidate after that.
-        # Use a short max-age (not immutable) because app.js/style.css change frequently.
+        # JS and CSS change on every deploy, so use no-cache (browser revalidates
+        # via ETag/Last-Modified — fast 304 on hit, fresh file on deploy).
+        # Other static assets (geojson, images, fonts) can be cached longer.
         path = request.url.path
         ext = os.path.splitext(path)[1].lower()
-        if path.startswith("/static/") and ext in _IMMUTABLE_EXTS:
+        if path.startswith("/static/") and ext in {".js", ".css"}:
+            response.headers["Cache-Control"] = "no-cache"
+        elif path.startswith("/static/") and ext in _IMMUTABLE_EXTS:
             response.headers["Cache-Control"] = "public, max-age=3600"
         elif path in ("/", "/favicon.ico"):
             response.headers["Cache-Control"] = "public, max-age=300"
