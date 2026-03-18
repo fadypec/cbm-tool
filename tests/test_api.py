@@ -64,6 +64,24 @@ class TestHealth:
         pool.getconn.assert_not_called()
 
 
+# ── /ready ─────────────────────────────────────────────────────────────────────
+
+class TestReady:
+    def test_returns_ready_when_db_ok(self, client):
+        c, pool = client
+        _setup_cursor(pool, fetchone={"?column?": 1})
+        r = c.get("/ready")
+        assert r.status_code == 200
+        assert r.json() == {"status": "ready"}
+
+    def test_returns_503_when_db_fails(self, client):
+        c, pool = client
+        pool.getconn.side_effect = Exception("connection refused")
+        r = c.get("/ready")
+        assert r.status_code == 503
+        assert r.json()["status"] == "unavailable"
+
+
 # ── Security headers ──────────────────────────────────────────────────────────
 
 class TestSecurityHeaders:

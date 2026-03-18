@@ -245,6 +245,17 @@ def health():
     return {"status": "ok"}
 
 
+@app.api_route("/ready", methods=["GET", "HEAD"], include_in_schema=False)
+def ready():
+    """Readiness probe — verifies DB pool can serve a connection."""
+    try:
+        with cursor() as cur:
+            cur.execute("SELECT 1")
+        return {"status": "ready"}
+    except Exception:
+        return JSONResponse({"status": "unavailable"}, status_code=503)
+
+
 # ── /api/bwc-membership ──────────────────────────────────────────────────────
 
 # BWC membership status for countries not in the submitting-countries list.
