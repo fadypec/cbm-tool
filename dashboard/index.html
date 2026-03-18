@@ -25,9 +25,10 @@
     <span id="app-title">CBM Facility Explorer</span>
     <span id="stats-bar"></span>
     <div id="search-wrap">
-        <input id="search-input" type="text" placeholder="Search facilities, organisms…" autocomplete="off">
-        <button id="search-mode-btn" data-action="toggle-search-mode" title="Switch to AI natural language search">🤖</button>
-        <ul id="search-results"></ul>
+        <input id="search-input" type="text" placeholder="Search facilities, organisms…" autocomplete="off"
+               aria-label="Search facilities and organisms" role="combobox" aria-expanded="false" aria-controls="search-results">
+        <button id="search-mode-btn" data-action="toggle-search-mode" title="Switch to AI natural language search" aria-label="Toggle AI search mode">🤖</button>
+        <ul id="search-results" role="listbox"></ul>
     </div>
     <!-- Review queue button: badge shows count of flagged records; hidden when zero -->
     <button id="navbar-review" data-action="show-review-queue" title="View all facilities flagged for review" style="display:none">
@@ -52,31 +53,31 @@
         </div>
         <div id="panel-detail" class="side-panel" style="display:none">
             <div class="side-header">
-                <button id="back-btn" data-action="show-panel-list" title="Back">←</button>
+                <button id="back-btn" data-action="show-panel-list" title="Back" aria-label="Back to country list">←</button>
                 <div class="ms-2" style="flex:1;min-width:0">
                     <div id="detail-title" class="side-title"></div>
                     <div id="detail-subtitle" class="detail-subtitle"></div>
                 </div>
             </div>
             <!-- Tab bar -->
-            <div id="detail-tabs">
-                <button class="dtab active" data-action="switch-tab" data-tab="compliance">Compliance</button>
-                <button class="dtab" data-action="switch-tab" data-tab="research">Research</button>
-                <button class="dtab" data-action="switch-tab" data-tab="defence">Defence</button>
-                <button class="dtab" data-action="switch-tab" data-tab="vaccine">Vaccine</button>
-                <button class="dtab" data-action="switch-tab" data-tab="legislation">Law</button>
-                <button class="dtab" data-action="switch-tab" data-tab="history">History</button>
+            <div id="detail-tabs" role="tablist" aria-label="Country detail tabs">
+                <button class="dtab active" data-action="switch-tab" data-tab="compliance" role="tab" aria-selected="true" aria-controls="tab-compliance">Compliance</button>
+                <button class="dtab" data-action="switch-tab" data-tab="research" role="tab" aria-selected="false" aria-controls="tab-research">Research</button>
+                <button class="dtab" data-action="switch-tab" data-tab="defence" role="tab" aria-selected="false" aria-controls="tab-defence">Defence</button>
+                <button class="dtab" data-action="switch-tab" data-tab="vaccine" role="tab" aria-selected="false" aria-controls="tab-vaccine">Vaccine</button>
+                <button class="dtab" data-action="switch-tab" data-tab="legislation" role="tab" aria-selected="false" aria-controls="tab-legislation">Law</button>
+                <button class="dtab" data-action="switch-tab" data-tab="history" role="tab" aria-selected="false" aria-controls="tab-history">History</button>
             </div>
             <div id="detail-loading" class="side-placeholder">Loading…</div>
             <div id="detail-content" style="display:none; flex:1; overflow:hidden; flex-direction:column">
 
                 <!-- Compliance tab -->
-                <div id="tab-compliance" class="tab-pane side-scroll">
+                <div id="tab-compliance" class="tab-pane side-scroll" role="tabpanel" aria-labelledby="tab-compliance-btn">
                     <div class="side-section">
                         <div class="compliance-legend">
                             <span><span class="leg-swatch" style="background:#1e7e45"></span>Substantive</span>
-                            <span><span class="leg-swatch" style="background:#7a4010"></span>Nothing to declare</span>
-                            <span><span class="leg-swatch" style="background:#8b6914"></span>Limited</span>
+                            <span><span class="leg-swatch" style="background:repeating-linear-gradient(45deg,#7a4010,#7a4010 2px,#9a5a2a 2px,#9a5a2a 3px)"></span>Nothing to declare</span>
+                            <span><span class="leg-swatch" style="background:#8b6914;background-image:radial-gradient(circle,rgba(255,255,255,0.3) 1px,transparent 1px);background-size:5px 5px"></span>Limited</span>
                             <span><span class="leg-swatch" style="background:#1c1e2e;border:1px solid #3a3c50"></span>Absent</span>
                         </div>
                         <div id="compliance-grid"></div>
@@ -84,32 +85,32 @@
                 </div>
 
                 <!-- Research (A1) tab -->
-                <div id="tab-research" class="tab-pane side-scroll" style="display:none">
+                <div id="tab-research" class="tab-pane side-scroll" role="tabpanel" aria-labelledby="tab-research-btn" style="display:none">
                     <div class="side-section-label" style="padding:10px 16px 0">DECLARED FACILITIES (FORM A1)</div>
                     <div id="facility-list"></div>
                 </div>
 
                 <!-- Defence (A2) tab -->
-                <div id="tab-defence" class="tab-pane" style="display:none; height:100%; overflow:hidden; flex-direction:column">
-                    <div id="defence-subtab-bar">
-                        <button class="dsubtab active" data-action="switch-defence-subtab" data-subtab="def-programmes">Programmes</button>
-                        <button class="dsubtab" data-action="switch-defence-subtab" data-subtab="def-facilities">Facilities</button>
+                <div id="tab-defence" class="tab-pane" role="tabpanel" aria-labelledby="tab-defence-btn" style="display:none; height:100%; overflow:hidden; flex-direction:column">
+                    <div id="defence-subtab-bar" role="tablist" aria-label="Defence sub-tabs">
+                        <button class="dsubtab active" data-action="switch-defence-subtab" data-subtab="def-programmes" role="tab" aria-selected="true">Programmes</button>
+                        <button class="dsubtab" data-action="switch-defence-subtab" data-subtab="def-facilities" role="tab" aria-selected="false">Facilities</button>
                     </div>
                     <div id="defence-content" class="side-scroll" style="height:calc(100% - 33px); overflow-y:auto"></div>
                 </div>
 
                 <!-- Vaccine (G) tab -->
-                <div id="tab-vaccine" class="tab-pane side-scroll" style="display:none">
+                <div id="tab-vaccine" class="tab-pane side-scroll" role="tabpanel" aria-labelledby="tab-vaccine-btn" style="display:none">
                     <div id="vaccine-content"><div class="side-placeholder">Loading…</div></div>
                 </div>
 
                 <!-- Legislation (E) tab -->
-                <div id="tab-legislation" class="tab-pane side-scroll" style="display:none">
+                <div id="tab-legislation" class="tab-pane side-scroll" role="tabpanel" aria-labelledby="tab-legislation-btn" style="display:none">
                     <div id="legislation-content"><div class="side-placeholder">Loading…</div></div>
                 </div>
 
                 <!-- Past Programmes (F) tab -->
-                <div id="tab-history" class="tab-pane side-scroll" style="display:none">
+                <div id="tab-history" class="tab-pane side-scroll" role="tabpanel" aria-labelledby="tab-history-btn" style="display:none">
                     <div id="history-content"><div class="side-placeholder">Loading…</div></div>
                 </div>
 
@@ -118,7 +119,7 @@
     </aside>
 
     <!-- Sidebar collapse tab (sits between sidebar and map) -->
-    <button id="sidebar-tab" data-action="toggle-sidebar" title="Collapse sidebar">◀</button>
+    <button id="sidebar-tab" data-action="toggle-sidebar" title="Collapse sidebar" aria-label="Toggle sidebar">◀</button>
 
     <!-- Map -->
     <div id="map">
@@ -127,7 +128,7 @@
         <div id="filter-panel">
             <div id="fp-header">
                 <span class="fp-title">Filters</span>
-                <button id="fp-collapse" data-action="toggle-filter-panel" title="Collapse">−</button>
+                <button id="fp-collapse" data-action="toggle-filter-panel" title="Collapse" aria-label="Toggle filter panel">−</button>
             </div>
             <div id="fp-body">
 
@@ -148,7 +149,7 @@
                     <div class="fp-label">ORGANISM FILTER <span class="fp-sublabel">(Research only)</span></div>
                     <div class="fp-organism-wrap">
                         <input id="organism-input" type="text" class="fp-organism-input"
-                               placeholder="e.g. anthrax, influenza">
+                               placeholder="e.g. anthrax, influenza" aria-label="Filter by organism name">
                         <button id="organism-clear" class="fp-organism-clear" data-action="clear-organism" style="display:none" title="Clear">×</button>
                     </div>
                 </div>
@@ -171,12 +172,12 @@
                     <div class="fp-label">YEAR</div>
                     <label class="fp-check"><input type="checkbox" id="all-years" checked> Latest per country</label>
                     <div class="fp-year-row">
-                        <button id="year-play" class="fp-play-btn" data-action="toggle-year-play" title="Animate through years" disabled>▶</button>
+                        <button id="year-play" class="fp-play-btn" data-action="toggle-year-play" title="Animate through years" aria-label="Play year animation" disabled>▶</button>
                         <input type="number" id="year-input" step="1" disabled
                                placeholder="e.g. 2022">
                     </div>
                     <input type="range" id="year-slider" step="1" disabled
-                           style="width:100%;margin:4px 0 0">
+                           aria-label="Select year" style="width:100%;margin:4px 0 0">
                     <div class="fp-year-range"><span id="yr-min"></span><span id="yr-max"></span></div>
                 </div>
 
@@ -192,7 +193,7 @@
                         Show facilities that went dark
                     </label>
                     <div id="lapsed-threshold-row" style="display:none">
-                        <div style="font-size:11px;color:#6070a0;margin-bottom:4px">
+                        <div style="font-size:11px;color:#8899c8;margin-bottom:4px">
                             Lapsed if last declared ≥
                             <input type="number" id="lapsed-years" value="3" min="1" max="20"
                                    style="width:42px;padding:1px 4px;font-size:11px;border:1px solid #c8d0e8;border-radius:3px;color:#2a3060;background:#eef1fa;text-align:center">
@@ -238,7 +239,7 @@
 </div><!-- /main -->
 
 <!-- ── Entity modal ────────────────────────────────────────────────────── -->
-<div class="modal fade" id="entity-modal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="entity-modal" tabindex="-1" aria-hidden="true" aria-labelledby="modal-title">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
@@ -251,21 +252,21 @@
 </div>
 
 <!-- ── About / Data Limitations modal ─────────────────────────────────── -->
-<div class="modal fade" id="about-modal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="about-modal" tabindex="-1" aria-hidden="true" aria-labelledby="about-modal-title">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">About this data</h5>
+                <h5 class="modal-title" id="about-modal-title">About this data</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
 
-                <p class="about-byline">Created by <a href="https://www.fady.phd/" target="_blank">Dr Paul-Enguerrand Fady</a></p>
+                <p class="about-byline">Created by <a href="https://www.fady.phd/" target="_blank" rel="noopener noreferrer">Dr Paul-Enguerrand Fady</a></p>
 
                 <!-- FEATURE 10: counts populated dynamically by renderStats() in app.js -->
                 <p>This tool visualises structured data extracted from <strong>Biological Weapons Convention (BWC)
                 Confidence-Building Measure (CBM)</strong> submissions, downloaded from the UN BWC portal
-                (<a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>), spanning 1988–2026.
+                (<a href="https://bwc-cbm.un.org" target="_blank" rel="noopener noreferrer">bwc-cbm.un.org</a>), spanning 1988–2026.
                 The database contains structured data from <strong><span id="about-sub-count">…</span> documents</strong>
                 representing <strong><span id="about-country-count">…</span> countries</strong> that have declared
                 biological research facilities.</p>
@@ -327,23 +328,23 @@
                 <h6 class="about-heading">Programmatic access</h6>
                 <p>The underlying data is accessible via a REST API. Interactive documentation
                 (including all endpoints and query parameters) is available at
-                <a href="/api/docs" target="_blank">/api/docs</a>.</p>
+                <a href="/api/docs" target="_blank" rel="noopener noreferrer">/api/docs</a>.</p>
 
                 <hr>
                 <p class="text-muted small">Data extracted and processed as part of academic research on BWC transparency.
                 Not an official UN or ISU product. All source documents are publicly available
-                at <a href="https://bwc-cbm.un.org" target="_blank">bwc-cbm.un.org</a>.</p>
+                at <a href="https://bwc-cbm.un.org" target="_blank" rel="noopener noreferrer">bwc-cbm.un.org</a>.</p>
             </div>
         </div>
     </div>
 </div>
 
 <!-- ── FEATURE 5: Global trends modal ──────────────────────────────────── -->
-<div class="modal fade" id="trends-modal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="trends-modal" tabindex="-1" aria-hidden="true" aria-labelledby="trends-modal-title">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Global Trends</h5>
+                <h5 class="modal-title" id="trends-modal-title">Global Trends</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body" id="trends-body">
@@ -354,11 +355,11 @@
 </div>
 
 <!-- ── AI Query modal ───────────────────────────────────────────────────── -->
-<div class="modal fade" id="ai-query-modal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="ai-query-modal" tabindex="-1" aria-hidden="true" aria-labelledby="ai-query-modal-title">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">🤖 AI Facility Search</h5>
+                <h5 class="modal-title" id="ai-query-modal-title">🤖 AI Facility Search</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -376,11 +377,11 @@
 </div>
 
 <!-- ── Global compliance table modal ───────────────────────────────────── -->
-<div class="modal fade" id="global-table-modal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="global-table-modal" tabindex="-1" aria-hidden="true" aria-labelledby="global-table-modal-title">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">All Countries — Submission Overview</h5>
+                <h5 class="modal-title" id="global-table-modal-title">All Countries — Submission Overview</h5>
                 <button type="button" id="gt-modal-close" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body p-0" id="gt-tbody">
@@ -391,11 +392,11 @@
 </div>
 
 <!-- ── Country comparison modal ─────────────────────────────────────────── -->
-<div class="modal fade" id="compare-modal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="compare-modal" tabindex="-1" aria-hidden="true" aria-labelledby="compare-modal-title">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Country Comparison</h5>
+                <h5 class="modal-title" id="compare-modal-title">Country Comparison</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -421,11 +422,11 @@
 </div>
 
 <!-- ── Review queue modal ────────────────────────────────────────────────── -->
-<div class="modal fade" id="review-modal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="review-modal" tabindex="-1" aria-hidden="true" aria-labelledby="review-modal-title">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">🚩 Review Queue</h5>
+                <h5 class="modal-title" id="review-modal-title">🚩 Review Queue</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body p-0" id="review-modal-body">

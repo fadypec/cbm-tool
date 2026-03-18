@@ -224,10 +224,10 @@ function markerOptions(layer, feature) {
     // choropleth country layer underneath, preventing accidental country navigation.
     const base = { color: '#fff', weight: 1.5, opacity: 1, fillOpacity: 0.85, bubblingMouseEvents: false };
 
-    // Lapsed facility: grey, reduced opacity, dashed border
+    // Lapsed facility: muted, dashed border, distinct from active markers
     if (layer === 'A1' && STATE.showLapsed && _lapsedIds.has(p.id)) {
-        return { ...base, radius: 7, fillColor: '#888888', fillOpacity: 0.45,
-                 color: '#aaa', weight: 1, dashArray: '3,3' };
+        return { ...base, radius: 7, fillColor: '#999999', fillOpacity: 0.6,
+                 color: '#bbb', weight: 1.5, dashArray: '3,3' };
     }
 
     if (layer === 'A1') return { ...base, radius: 8, fillColor: bslColor(p.containment) };
@@ -790,8 +790,8 @@ function choroColor(rate) {
     if (rate > 0.8)   return '#08519c';
     if (rate > 0.6)   return '#2171b5';
     if (rate > 0.4)   return '#4292c6';
-    if (rate > 0.2)   return '#9ecae1';
-    if (rate > 0)     return '#deebf7';
+    if (rate > 0.2)   return '#74b4d8';
+    if (rate > 0)     return '#b0d0ed';
     return '#f5f5f5';
 }
 
@@ -815,13 +815,13 @@ function updateChoropleth(rates) {
             const d = rates[iso3];
             let newStyle;
             if (d) {
-                newStyle = { fillColor: choroColor(+d.a1_rate), fillOpacity: 0.55, weight: 0.5, color: '#aaa', opacity: 0.6 };
+                newStyle = { fillColor: choroColor(+d.a1_rate), fillOpacity: 0.7, weight: 0.5, color: '#aaa', opacity: 0.6 };
             } else if (BWC_NON_PARTIES.has(iso3)) {
                 newStyle = { fillColor: 'url(#country-hatch)', fillOpacity: 1, weight: 0.5, color: '#bbb', opacity: 0.5 };
             } else if (BWC_SIGNATORIES.has(iso3)) {
-                newStyle = { fillColor: '#d4b870', fillOpacity: 0.35, weight: 0.6, color: '#b09040', opacity: 0.6 };
+                newStyle = { fillColor: '#d4b870', fillOpacity: 0.55, weight: 0.6, color: '#b09040', opacity: 0.6 };
             } else {
-                newStyle = { fillColor: '#b8bdd0', fillOpacity: 0.40, weight: 0.5, color: '#8890a0', opacity: 0.6 };
+                newStyle = { fillColor: '#b8bdd0', fillOpacity: 0.55, weight: 0.5, color: '#8890a0', opacity: 0.6 };
             }
             layer.setStyle(newStyle);
 
@@ -885,13 +885,13 @@ async function loadChoropleth() {
                 const name = feature.properties.name;
                 const isRestricted = RESTRICTED.has(iso3) || RESTRICTED_NAMES.has(name);
                 if (isRestricted) {
-                    return { fillColor: '#5c3370', fillOpacity: 0.45, weight: 0.5, color: '#999', opacity: 0.6 };
+                    return { fillColor: '#5c3370', fillOpacity: 0.65, weight: 0.5, color: '#999', opacity: 0.6 };
                 }
                 const d = complianceRates[iso3];
                 if (d) {
                     return {
                         fillColor:   choroColor(+d.a1_rate),
-                        fillOpacity: 0.55,
+                        fillOpacity: 0.7,
                         weight:      0.5,
                         color:       '#aaa',
                         opacity:     0.6,
@@ -902,10 +902,10 @@ async function loadChoropleth() {
                     return { fillColor: 'url(#country-hatch)', fillOpacity: 1, weight: 0.5, color: '#bbb', opacity: 0.5 };
                 }
                 if (BWC_SIGNATORIES.has(iso3)) {
-                    return { fillColor: '#d4b870', fillOpacity: 0.35, weight: 0.6, color: '#b09040', opacity: 0.6 };
+                    return { fillColor: '#d4b870', fillOpacity: 0.55, weight: 0.6, color: '#b09040', opacity: 0.6 };
                 }
                 // BWC state party but no public CBM data
-                return { fillColor: '#b8bdd0', fillOpacity: 0.40, weight: 0.5, color: '#8890a0', opacity: 0.6 };
+                return { fillColor: '#b8bdd0', fillOpacity: 0.55, weight: 0.5, color: '#8890a0', opacity: 0.6 };
             },
             onEachFeature: (feature, layer) => {
                 const iso3 = feature.properties['ISO3166-1-Alpha-3'];
@@ -967,10 +967,10 @@ function addLegend() {
                 `<div>${dot('#0a7a6a')}Vaccine (G)</div>` +
                 `<div class="leg-title">SUBMISSION RATE (FORM ${choroForm})</div>` +
                 [['>80%','#08519c'],['60–80%','#2171b5'],['40–60%','#4292c6'],
-                 ['20–40%','#9ecae1'],['1–20%','#deebf7']]
+                 ['20–40%','#74b4d8'],['1–20%','#b0d0ed']]
                     .map(([l,c]) => `<div>${sq(c)}${l}</div>`).join('') +
                 `<div class="leg-title">BWC MEMBERSHIP</div>` +
-                `<div>${sq('#5c3370')}Restricted (CHN/FRA/RUS/IND)</div>` +
+                `<div><span class="legend-sq" style="background:#5c3370;opacity:0.65"></span>Restricted (CHN/FRA/RUS/IND)</div>` +
                 `<div>${sq('#b8bdd0')}State party — no public CBM</div>` +
                 `<div>${sq('#d4b870')}Signatory (not ratified)</div>` +
                 `<div>${hatch}Non-member</div>` +
@@ -1074,7 +1074,7 @@ function renderCountryDetail(data) {
         const rate  = cr.a1_rate != null ? ` · A1 ${Math.round(cr.a1_rate * 100)}%` : '';
         const tBadge = ts != null ? ` · <span style="font-size:10px">${transparencyBadge(ts)}</span>` : '';
         const exportBtn = `<button data-action="export-country-report" data-iso3="${esc(data.country_iso3 || _currentIso3)}"
-            style="background:none;border:none;color:#4a5280;font-size:10px;cursor:pointer;padding:0 0 0 6px"
+            style="background:none;border:none;color:#8090b8;font-size:10px;cursor:pointer;padding:0 0 0 6px"
             title="Export report card">↗ report</button>`;
         sub.innerHTML = `${cr.submission_count} sub${cr.submission_count !== 1 ? 's' : ''}${rate}${tBadge}${exportBtn}`;
     } else if (sub) { sub.innerHTML = ''; }
@@ -1097,9 +1097,11 @@ function renderCountryDetail(data) {
 }
 
 function switchDetailTab(name) {
-    document.querySelectorAll('.dtab').forEach(b =>
-        b.classList.toggle('active', b.dataset.tab === name)
-    );
+    document.querySelectorAll('.dtab').forEach(b => {
+        const isActive = b.dataset.tab === name;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', isActive);
+    });
     document.querySelectorAll('.tab-pane').forEach(p => {
         const active = p.id === `tab-${name}`;
         // Defence tab uses flex layout for its sub-tab bar
@@ -1122,7 +1124,7 @@ function renderComplianceGrid(compliance) {
     const FORMS = ['A1', 'A2', 'B', 'C', 'E', 'F', 'G'];
 
     if (!compliance || compliance.length === 0) {
-        el.innerHTML = '<div style="color:#4a5280;font-size:12px">No compliance data</div>';
+        el.innerHTML = '<div style="color:#8090b8;font-size:12px">No compliance data</div>';
         return;
     }
 
@@ -1139,7 +1141,7 @@ function renderComplianceGrid(compliance) {
         s === 'limited'            ? 'td-ltd' : 'td-abs';
 
     let html =
-        `<table>` +
+        `<table role="grid" aria-label="Compliance grid: form submission status by year">` +
         `<colgroup><col class="yr-col">${FORMS.map(() => `<col class="frm-col">`).join('')}</colgroup>` +
         `<thead><tr><th class="yr-col">Year</th>${FORMS.map(f => `<th>${f}</th>`).join('')}</tr></thead>` +
         `<tbody>`;
@@ -1148,7 +1150,8 @@ function renderComplianceGrid(compliance) {
         html += `<tr><td class="yr-col">${yr}</td>`;
         FORMS.forEach(f => {
             const s = byYear[yr][f];
-            html += `<td class="${tdClass(s)}" title="${f}: ${s ? s.replace(/_/g,' ') : 'absent'}"></td>`;
+            const label = s ? s.replace(/_/g, ' ') : 'absent';
+            html += `<td class="${tdClass(s)}" title="${f}: ${label}" role="gridcell" aria-label="${f} ${yr}: ${label}"></td>`;
         });
         html += '</tr>';
     });
@@ -1161,7 +1164,7 @@ function renderComplianceGrid(compliance) {
 function renderFacilityList(facilities) {
     const el = document.getElementById('facility-list');
     if (!facilities || facilities.length === 0) {
-        el.innerHTML = '<div style="color:#4a5280;font-size:12px;padding:8px 0">No declared research facilities</div>';
+        el.innerHTML = '<div style="color:#8090b8;font-size:12px;padding:8px 0">No declared research facilities</div>';
         return;
     }
     el.innerHTML = facilities.map(f => {
@@ -1170,7 +1173,7 @@ function renderFacilityList(facilities) {
             : '';
         // FEATURE 7: source link in facility list
         const sourceLink = f.latest_source_url
-            ? `<a href="${esc(f.latest_source_url)}" target="_blank" class="popup-link" style="font-size:10px;margin-left:6px">source ↗</a>`
+            ? `<a href="${esc(f.latest_source_url)}" target="_blank" rel="noopener noreferrer" class="popup-link" style="font-size:10px;margin-left:6px">source ↗</a>`
             : '';
         // FEATURE 2: agents second meta line (truncated to 60 chars)
         const agentsMeta = f.agents_summary
@@ -1208,9 +1211,11 @@ async function loadDefenceTab(iso3) {
 
 function switchDefenceSubtab(name) {
     _defenceSubtab = name;
-    document.querySelectorAll('.dsubtab').forEach(b =>
-        b.classList.toggle('active', b.dataset.subtab === name)
-    );
+    document.querySelectorAll('.dsubtab').forEach(b => {
+        const isActive = b.dataset.subtab === name;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', isActive);
+    });
     if (!_defenceData) return;
     if (name === 'def-programmes') {
         renderDefenceProgrammes(_defenceData.programmes);
@@ -1231,7 +1236,7 @@ function renderDefenceProgrammes(programmes) {
         programmes.map(p => `
             <div class="def-prog">
                 <div class="def-prog-name">${esc(p.programme_name || 'National Programme')}
-                    <span style="color:#404870;font-weight:400;margin-left:6px">${p.year}</span></div>
+                    <span style="color:#8090b0;font-weight:400;margin-left:6px">${p.year}</span></div>
                 ${p.responsible_org ? `<div class="def-prog-org">${esc(p.responsible_org)}</div>` : ''}
                 ${p.objectives_summary ? `<div class="def-prog-obj">${esc(p.objectives_summary)}</div>` : ''}
                 ${p.total_funding_amount ? `<div class="def-prog-org" style="margin-top:3px">Funding: ${esc(p.total_funding_amount)} ${esc(p.total_funding_currency || '')}</div>` : ''}
@@ -1309,7 +1314,7 @@ function renderDefenceEntityModal(data) {
             <div class="year-record">
                 <div class="yr-head">${yr.year}
                     ${yr.source_url
-                        ? `<a href="${esc(yr.source_url)}" target="_blank" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
+                        ? `<a href="${esc(yr.source_url)}" target="_blank" rel="noopener noreferrer" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
                         : ''}
                     ${yr.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(yr.confidence * 100)}%</small>` : ''}
                     ${yr.geocode_confidence ? `<small class="text-muted fw-normal ms-2">geocode: ${yr.geocode_confidence}</small>` : ''}
@@ -1362,7 +1367,7 @@ function renderVaccineEntityModal(data) {
             <div class="year-record">
                 <div class="yr-head">${rec.year}
                     ${rec.source_url
-                        ? `<a href="${esc(rec.source_url)}" target="_blank" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
+                        ? `<a href="${esc(rec.source_url)}" target="_blank" rel="noopener noreferrer" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
                         : `<small class="text-muted fw-normal ms-2">${esc(rec.document_id)}</small>`}
                     ${rec.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(rec.confidence * 100)}%</small>` : ''}
                 </div>
@@ -1417,12 +1422,12 @@ async function loadLegislationTab(iso3) {
             ['biosafety',    'Biosafety'],
         ];
         const flds = ['legislation', 'regulations', 'other_measures'];
-        let html = `<div style="padding:8px 16px 4px;color:#4a5280;font-size:10px;font-weight:700;letter-spacing:0.08em">FORM E — ${data.length} YEAR${data.length !== 1 ? 'S' : ''}</div>`;
+        let html = `<div style="padding:8px 16px 4px;color:#8090b8;font-size:10px;font-weight:700;letter-spacing:0.08em">FORM E — ${data.length} YEAR${data.length !== 1 ? 'S' : ''}</div>`;
         data.forEach(rec => {
             const laws = rec.key_laws && Array.isArray(rec.key_laws) ? rec.key_laws : [];
             html += `<div class="leg-year-block">
                 <div class="leg-year-head">${rec.year}
-                    ${rec.source_url ? `<a href="${esc(rec.source_url)}" target="_blank" class="popup-link" style="font-size:10px;margin-left:8px">source ↗</a>` : ''}
+                    ${rec.source_url ? `<a href="${esc(rec.source_url)}" target="_blank" rel="noopener noreferrer" class="popup-link" style="font-size:10px;margin-left:8px">source ↗</a>` : ''}
                 </div>
                 <table class="leg-table">
                     <tr><td></td><td>Legis.</td><td>Regs.</td><td>Other</td><td>Amended</td></tr>
@@ -1449,13 +1454,13 @@ async function loadHistoryTab(iso3) {
             el.innerHTML = '<div class="side-placeholder">No past programme data declared</div>';
             return;
         }
-        el.innerHTML = `<div style="padding:8px 16px 4px;color:#4a5280;font-size:10px;font-weight:700;letter-spacing:0.08em">FORM F — PAST PROGRAMMES</div>` +
+        el.innerHTML = `<div style="padding:8px 16px 4px;color:#8090b8;font-size:10px;font-weight:700;letter-spacing:0.08em">FORM F — PAST PROGRAMMES</div>` +
             data.map(rec => {
                 const hasBadge = (flag, cls, label) =>
                     `<span class="hist-badge ${flag ? cls : 'hist-none'}">${label}: ${flag ? 'Yes' : 'No'}</span>`;
                 return `<div class="hist-item">
                     <div class="hist-year">${rec.year}
-                        ${rec.source_url ? `<a href="${esc(rec.source_url)}" target="_blank" class="popup-link" style="font-size:10px;margin-left:8px">source ↗</a>` : ''}
+                        ${rec.source_url ? `<a href="${esc(rec.source_url)}" target="_blank" rel="noopener noreferrer" class="popup-link" style="font-size:10px;margin-left:8px">source ↗</a>` : ''}
                     </div>
                     <div style="margin-bottom:4px">
                         ${hasBadge(rec.has_offensive_programme, 'hist-offensive', 'Offensive')}
@@ -1528,7 +1533,7 @@ function renderEntityModal(data) {
             <div class="year-record">
                 <div class="yr-head">${rec.year}
                     ${rec.source_url
-                        ? `<a href="${esc(rec.source_url)}" target="_blank" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
+                        ? `<a href="${esc(rec.source_url)}" target="_blank" rel="noopener noreferrer" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
                         : `<small class="text-muted fw-normal ms-2">${esc(rec.document_id)}</small>`}
                     ${rec.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(rec.confidence * 100)}%</small>` : ''}
                     ${rec.geocode_confidence ? `<small class="text-muted fw-normal ms-2">geocode: ${rec.geocode_confidence}</small>` : ''}
@@ -1558,9 +1563,11 @@ function renderEntityModal(data) {
 }
 
 function switchEntityTab(btn, tab) {
-    btn.closest('.em-tab-bar').querySelectorAll('.em-tab').forEach(b =>
-        b.classList.toggle('active', b.dataset.tab === tab)
-    );
+    btn.closest('.em-tab-bar').querySelectorAll('.em-tab').forEach(b => {
+        const isActive = b.dataset.tab === tab;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', isActive);
+    });
     const body = document.getElementById('modal-body');
     const panels = { records: 'em-records-panel', changes: 'em-changes-panel', timeline: 'em-timeline-panel' };
     Object.entries(panels).forEach(([key, id]) => {
@@ -1627,11 +1634,12 @@ function initSearch() {
     document.addEventListener('mousedown', e => {
         if (!results.contains(e.target) && e.target !== input) {
             results.classList.remove('open');
+            input.setAttribute('aria-expanded', 'false');
         }
     });
 
     document.addEventListener('keydown', e => {
-        if (e.key === 'Escape') { results.classList.remove('open'); input.blur(); }
+        if (e.key === 'Escape') { results.classList.remove('open'); input.setAttribute('aria-expanded', 'false'); input.blur(); }
     });
 }
 
@@ -1674,7 +1682,7 @@ async function doSearch(q) {
         const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
         input.classList.remove('searching');
         results.innerHTML = data.length === 0
-            ? '<li style="color:#6070a0;font-size:12px;padding:10px 14px">No results found</li>'
+            ? '<li style="color:#8899c8;font-size:12px;padding:10px 14px">No results found</li>'
             : data.map((f, i) => {
                 const layerColor = _LAYER_COLOR[f.layer] || '#4a8ad4';
                 const layerLabel = _LAYER_LABEL[f.layer] || f.layer;
@@ -1703,6 +1711,7 @@ async function doSearch(q) {
                 </li>`;
               }).join('');
         results.classList.add('open');
+        input.setAttribute('aria-expanded', 'true');
     } catch (e) {
         input.classList.remove('searching');
         console.error('Search error:', e);
@@ -1711,6 +1720,7 @@ async function doSearch(q) {
 
 async function selectSearchResult(entityId, iso3, layer) {
     document.getElementById('search-results').classList.remove('open');
+    document.getElementById('search-input').setAttribute('aria-expanded', 'false');
     document.getElementById('search-input').value = '';
     await selectCountry(iso3);
     if (layer === 'A1' && entityId) {
@@ -1843,9 +1853,11 @@ async function showTrends() {
 }
 
 function switchTrendsTab(tab) {
-    document.querySelectorAll('.trends-tab').forEach(b =>
-        b.classList.toggle('active', b.dataset.tab === tab)
-    );
+    document.querySelectorAll('.trends-tab').forEach(b => {
+        const isActive = b.dataset.tab === tab;
+        b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', isActive);
+    });
     document.getElementById('trends-chart-panel').style.display    = tab === 'chart'    ? '' : 'none';
     document.getElementById('trends-pathogen-panel').style.display = tab === 'pathogens'? '' : 'none';
     document.getElementById('trends-changes-panel').style.display  = tab === 'changes'  ? '' : 'none';
@@ -2163,7 +2175,7 @@ async function loadReviewQueue() {
                 <td class="rq-note">${r.flag_note ? esc(r.flag_note) : '<span class="text-muted">—</span>'}</td>
                 <td>
                     ${r.source_url
-                        ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener" class="rq-src-link">source ↗</a>`
+                        ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener noreferrer" class="rq-src-link">source ↗</a>`
                         : ''}
                 </td>
                 <td>
@@ -2692,7 +2704,7 @@ function renderBsl4CapacityChart(rows, container) {
 
     const svg = `<svg class="trends-chart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
         ${axes}${xTicks}${yTicks}${polylines}
-        <text x="${pad.left-38}" y="${pad.top+innerH/2}" text-anchor="middle" font-size="9" fill="#6070a0" transform="rotate(-90,${pad.left-38},${pad.top+innerH/2})">m² declared</text>
+        <text x="${pad.left-38}" y="${pad.top+innerH/2}" text-anchor="middle" font-size="9" fill="#8899c8" transform="rotate(-90,${pad.left-38},${pad.top+innerH/2})">m² declared</text>
     </svg>`;
 
     const legend = `<div class="capacity-country-legend">
@@ -3007,7 +3019,7 @@ function renderTimelineTab(yearRecords) {
     </div>`;
 
     return `<div class="timeline-wrap">${svg}${legend}</div>
-        <p style="font-size:11px;color:#6070a0;margin-top:8px">Hover dots for year details. Annotated events: BSL-4 gained/lost, large area changes.</p>`;
+        <p style="font-size:11px;color:#8899c8;margin-top:8px">Hover dots for year details. Annotated events: BSL-4 gained/lost, large area changes.</p>`;
 }
 
 // Dot hover handler (called from SVG mouseover on circles)
