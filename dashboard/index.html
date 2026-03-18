@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>CBM Facility Explorer</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <!-- Restore saved theme before CSS renders — prevents flash of wrong theme -->
+    <script>(function(){try{var t=localStorage.getItem('cbm-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch(e){}})();</script>
 
     <!-- Bootstrap 5 -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -34,6 +36,7 @@
     <button id="navbar-review" data-action="show-review-queue" title="View all facilities flagged for review" style="display:none">
         🚩 Review Queue <span id="review-badge" class="review-badge">0</span>
     </button>
+    <button id="theme-toggle" data-action="toggle-theme" aria-label="Switch to light mode" aria-pressed="false" title="Switch to light mode">☀</button>
     <button id="navbar-about" data-bs-toggle="modal" data-bs-target="#about-modal">About</button>
 </nav>
 
@@ -193,10 +196,9 @@
                         Show facilities that went dark
                     </label>
                     <div id="lapsed-threshold-row" style="display:none">
-                        <div style="font-size:11px;color:#8899c8;margin-bottom:4px">
+                        <div class="fp-lapsed-row-label">
                             Lapsed if last declared ≥
-                            <input type="number" id="lapsed-years" value="3" min="1" max="20"
-                                   style="width:42px;padding:1px 4px;font-size:11px;border:1px solid #c8d0e8;border-radius:3px;color:#2a3060;background:#eef1fa;text-align:center">
+                            <input type="number" id="lapsed-years" value="3" min="1" max="20" class="fp-lapsed-input">
                             years before country's latest CBM
                         </div>
                         <div class="fp-lapsed-legend">

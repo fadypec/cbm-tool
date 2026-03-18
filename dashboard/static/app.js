@@ -12,6 +12,24 @@ const RESTRICTED_NAMES = new Set(['France']);
 const BWC_SIGNATORIES = new Set(['EGY', 'HTI', 'SOM', 'SYR']);
 const BWC_NON_PARTIES = new Set(['TCD', 'COM', 'DJI', 'ERI', 'ISR', 'FSM', 'NAM', 'SSD', 'TUV']);
 
+// Choropleth layer styles — shared between loadChoropleth() and updateChoropleth()
+const CHORO_STYLE_RESTRICTED  = { fillColor: '#5c3370', fillOpacity: 0.65, weight: 0.5, color: '#999',    opacity: 0.6 };
+const CHORO_STYLE_CBM         = (fillColor) => ({ fillColor, fillOpacity: 0.7,  weight: 0.5, color: '#aaa',    opacity: 0.6 });
+const CHORO_STYLE_NON_PARTY   = { fillColor: 'url(#country-hatch)', fillOpacity: 1,    weight: 0.5, color: '#bbb',    opacity: 0.5 };
+const CHORO_STYLE_SIGNATORY   = { fillColor: '#d4b870', fillOpacity: 0.55, weight: 0.6, color: '#b09040', opacity: 0.6 };
+const CHORO_STYLE_NO_DATA     = { fillColor: '#b8bdd0', fillOpacity: 0.55, weight: 0.5, color: '#8890a0', opacity: 0.6 };
+
+// Map tile URLs for light / dark themes
+const TILE_URLS = {
+    light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    dark:  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+};
+const TILE_ATTRIBUTION =
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' +
+    ' contributors &copy; <a href="https://carto.com/">CARTO</a>';
+
+let _tileLayer = null;
+
 // ── State ──────────────────────────────────────────────────────────────────
 
 const STATE = {
@@ -59,6 +77,7 @@ let _transparencyMap = {};  // iso3 → transparency_score
 // ── Bootstrap ──────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
+    initTheme();
     initMap();
     initClusters();
     entityModal = new bootstrap.Modal(document.getElementById('entity-modal'));
@@ -168,6 +187,46 @@ function updateStatsBar() {
 
 // ── Map ────────────────────────────────────────────────────────────────────
 
+// ── Theme ──────────────────────────────────────────────────────────────────
+
+function initTheme() {
+    // The inline script in <head> already applied the saved theme to <html>.
+    // This function just syncs the toggle button label on first render.
+    _syncThemeBtn(document.documentElement.dataset.theme || 'dark');
+}
+
+function _syncThemeBtn(theme) {
+    const btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    const isLight = theme === 'light';
+    btn.textContent = isLight ? '☾' : '☀';
+    btn.title       = isLight ? 'Switch to dark mode'  : 'Switch to light mode';
+    btn.setAttribute('aria-label',   isLight ? 'Switch to dark mode'  : 'Switch to light mode');
+    btn.setAttribute('aria-pressed', String(isLight));
+}
+
+function toggleTheme() {
+    const current = document.documentElement.dataset.theme || 'dark';
+    const next    = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('cbm-theme', next); } catch (_) {}
+    _syncThemeBtn(next);
+    _swapTile(next);
+}
+
+function _swapTile(theme) {
+    if (!map || !_tileLayer) return;
+    map.removeLayer(_tileLayer);
+    _tileLayer = L.tileLayer(TILE_URLS[theme], {
+        attribution: TILE_ATTRIBUTION,
+        maxZoom: 19,
+        noWrap:  true,
+    }).addTo(map);
+    _tileLayer.bringToBack();
+}
+
+// ── Map ────────────────────────────────────────────────────────────────────
+
 function initMap() {
     map = L.map('map', {
         zoomControl: false,
@@ -175,10 +234,9 @@ function initMap() {
         maxBounds: [[-90, -180], [90, 180]],
         maxBoundsViscosity: 1.0,
     }).setView([20, 0], 2);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' +
-            ' contributors &copy; <a href="https://carto.com/">CARTO</a>',
+    const theme = document.documentElement.dataset.theme || 'dark';
+    _tileLayer = L.tileLayer(TILE_URLS[theme], {
+        attribution: TILE_ATTRIBUTION,
         maxZoom: 19,
         noWrap: true,
     }).addTo(map);
@@ -815,13 +873,13 @@ function updateChoropleth(rates) {
             const d = rates[iso3];
             let newStyle;
             if (d) {
-                newStyle = { fillColor: choroColor(+d.a1_rate), fillOpacity: 0.7, weight: 0.5, color: '#aaa', opacity: 0.6 };
+                newStyle = CHORO_STYLE_CBM(choroColor(+d.a1_rate));
             } else if (BWC_NON_PARTIES.has(iso3)) {
-                newStyle = { fillColor: 'url(#country-hatch)', fillOpacity: 1, weight: 0.5, color: '#bbb', opacity: 0.5 };
+                newStyle = CHORO_STYLE_NON_PARTY;
             } else if (BWC_SIGNATORIES.has(iso3)) {
-                newStyle = { fillColor: '#d4b870', fillOpacity: 0.55, weight: 0.6, color: '#b09040', opacity: 0.6 };
+                newStyle = CHORO_STYLE_SIGNATORY;
             } else {
-                newStyle = { fillColor: '#b8bdd0', fillOpacity: 0.55, weight: 0.5, color: '#8890a0', opacity: 0.6 };
+                newStyle = CHORO_STYLE_NO_DATA;
             }
             layer.setStyle(newStyle);
 
@@ -885,27 +943,21 @@ async function loadChoropleth() {
                 const name = feature.properties.name;
                 const isRestricted = RESTRICTED.has(iso3) || RESTRICTED_NAMES.has(name);
                 if (isRestricted) {
-                    return { fillColor: '#5c3370', fillOpacity: 0.65, weight: 0.5, color: '#999', opacity: 0.6 };
+                    return CHORO_STYLE_RESTRICTED;
                 }
                 const d = complianceRates[iso3];
                 if (d) {
-                    return {
-                        fillColor:   choroColor(+d.a1_rate),
-                        fillOpacity: 0.7,
-                        weight:      0.5,
-                        color:       '#aaa',
-                        opacity:     0.6,
-                    };
+                    return CHORO_STYLE_CBM(choroColor(+d.a1_rate));
                 }
                 // No CBM data — style by BWC membership
                 if (BWC_NON_PARTIES.has(iso3)) {
-                    return { fillColor: 'url(#country-hatch)', fillOpacity: 1, weight: 0.5, color: '#bbb', opacity: 0.5 };
+                    return CHORO_STYLE_NON_PARTY;
                 }
                 if (BWC_SIGNATORIES.has(iso3)) {
-                    return { fillColor: '#d4b870', fillOpacity: 0.55, weight: 0.6, color: '#b09040', opacity: 0.6 };
+                    return CHORO_STYLE_SIGNATORY;
                 }
                 // BWC state party but no public CBM data
-                return { fillColor: '#b8bdd0', fillOpacity: 0.55, weight: 0.5, color: '#8890a0', opacity: 0.6 };
+                return CHORO_STYLE_NO_DATA;
             },
             onEachFeature: (feature, layer) => {
                 const iso3 = feature.properties['ISO3166-1-Alpha-3'];
@@ -3133,6 +3185,11 @@ function initEventDelegation() {
                 break;
             case 'select-search-result':
                 selectSearchResult(el.dataset.entityId, el.dataset.iso3, el.dataset.layer);
+                break;
+
+            // ── Theme ──
+            case 'toggle-theme':
+                toggleTheme();
                 break;
 
             // ── Sidebar / panels ──

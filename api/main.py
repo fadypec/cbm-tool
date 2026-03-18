@@ -225,13 +225,13 @@ def favicon():
     return FileResponse(DASHBOARD_DIR / "static" / "favicon.svg", media_type="image/svg+xml")
 
 
-# ── /api/stats ───────────────────────────────────────────────────────────────
-
 @app.get("/health", include_in_schema=False)
 def health():
     """Lightweight healthcheck — no DB query, always returns 200 when the process is alive."""
     return {"status": "ok"}
 
+
+# ── /api/stats ───────────────────────────────────────────────────────────────
 
 @app.get("/api/stats", summary="Global summary statistics")
 @limiter.limit("60/minute")

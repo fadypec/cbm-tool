@@ -135,6 +135,14 @@ echo "[NOTE] This truncates and reloads all tables. Geocoded coordinates are pre
 python3 "${PROJECT_ROOT}/scripts/06_load_database.py"
 echo ""
 
+# ── Step 6b: Entity deduplication ────────────────────────────────────────────
+# Must run after DB load so the facilities table is populated with fresh data.
+# dedup_entities.py merges known fragmented canonical entities (multilingual names,
+# agency renames, etc.) — see AUDIT_DATA.md §1 for the full list of known issues.
+echo "--- Step 6b: Entity deduplication ---"
+python3 "${PROJECT_ROOT}/scripts/dedup_entities.py" --apply
+echo ""
+
 # ── Step 7: Geocode new facilities ────────────────────────────────────────────
 echo "--- Step 7: Geocode new facilities (may take ~2 hours for a full run) ---"
 echo "[NOTE] Only un-geocoded rows are processed; previously geocoded rows are skipped."
