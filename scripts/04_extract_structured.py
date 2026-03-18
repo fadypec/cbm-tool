@@ -653,6 +653,46 @@ def api_call(
     return resp
 
 
+def call_and_parse(
+    client: anthropic.Anthropic,
+    messages: list[dict],
+    last_t: list[float],
+    entry_id: str,
+    system: str = SYSTEM_PROMPT,
+    form_tag: str = "",
+) -> tuple[dict | None, dict]:
+    """
+    Call the API, parse the JSON response, retry once if not valid JSON.
+    Returns (parsed_data_or_None, usage_dict).
+    """
+    resp = api_call(client, messages, last_t, system=system)
+    raw = resp.content[0].text
+    usage = {
+        "input_tokens": resp.usage.input_tokens,
+        "output_tokens": resp.usage.output_tokens,
+    }
+    data = parse_json_response(raw)
+    if data is not None:
+        return data, usage
+
+    tag = f"/{form_tag}" if form_tag else ""
+    log.warning("[%s%s] Response not valid JSON — retrying once", entry_id, tag)
+    messages += [
+        {"role": "assistant", "content": raw},
+        {"role": "user", "content":
+         "Your response was not valid JSON. "
+         "Return ONLY the JSON object — no markdown fences, no explanation."},
+    ]
+    resp2 = api_call(client, messages, last_t, system=system)
+    raw2 = resp2.content[0].text
+    usage["input_tokens"]  += resp2.usage.input_tokens
+    usage["output_tokens"] += resp2.usage.output_tokens
+    data = parse_json_response(raw2)
+    if data is None:
+        log.error("[%s%s] Retry also returned invalid JSON", entry_id, tag)
+    return data, usage
+
+
 def extract_chunk(
     client: anthropic.Anthropic,
     chunk_text: str,
@@ -670,36 +710,11 @@ def extract_chunk(
         f"{chunk_text}"
     )
     messages: list[dict] = [{"role": "user", "content": user_content}]
-
-    resp = api_call(client, messages, last_t)
-    raw = resp.content[0].text
-    usage = {
-        "input_tokens": resp.usage.input_tokens,
-        "output_tokens": resp.usage.output_tokens,
-    }
+    data, usage = call_and_parse(client, messages, last_t, entry["id"])
     log.debug("[%s] tokens in=%d out=%d", entry["id"],
               usage["input_tokens"], usage["output_tokens"])
-
-    data = parse_json_response(raw)
-
     if data is None:
-        log.warning("[%s] Response not valid JSON — retrying once", entry["id"])
-        messages += [
-            {"role": "assistant", "content": raw},
-            {"role": "user", "content":
-             "Your response was not valid JSON. "
-             "Return ONLY the JSON object — no markdown fences, no explanation."},
-        ]
-        resp2 = api_call(client, messages, last_t)
-        raw2 = resp2.content[0].text
-        usage["input_tokens"]  += resp2.usage.input_tokens
-        usage["output_tokens"] += resp2.usage.output_tokens
-        data = parse_json_response(raw2)
-
-        if data is None:
-            log.error("[%s] Retry also returned invalid JSON", entry["id"])
-            return [], usage
-
+        return [], usage
     return data.get("facilities", []), usage
 
 
@@ -812,34 +827,10 @@ def extract_chunk_g(
         f"{chunk_text}"
     )
     messages: list[dict] = [{"role": "user", "content": user_content}]
-
-    resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_G)
-    raw = resp.content[0].text
-    usage = {
-        "input_tokens": resp.usage.input_tokens,
-        "output_tokens": resp.usage.output_tokens,
-    }
-
-    data = parse_json_response(raw)
-
+    data, usage = call_and_parse(client, messages, last_t, entry["id"],
+                                 system=SYSTEM_PROMPT_G, form_tag="G")
     if data is None:
-        log.warning("[%s/G] Response not valid JSON — retrying once", entry["id"])
-        messages += [
-            {"role": "assistant", "content": raw},
-            {"role": "user", "content":
-             "Your response was not valid JSON. "
-             "Return ONLY the JSON object — no markdown fences, no explanation."},
-        ]
-        resp2 = api_call(client, messages, last_t, system=SYSTEM_PROMPT_G)
-        raw2 = resp2.content[0].text
-        usage["input_tokens"]  += resp2.usage.input_tokens
-        usage["output_tokens"] += resp2.usage.output_tokens
-        data = parse_json_response(raw2)
-
-        if data is None:
-            log.error("[%s/G] Retry also returned invalid JSON", entry["id"])
-            return [], usage
-
+        return [], usage
     return data.get("vaccine_facilities", []), usage
 
 
@@ -970,34 +961,10 @@ def extract_chunk_a2(
         f"{chunk_text}"
     )
     messages: list[dict] = [{"role": "user", "content": user_content}]
-
-    resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_A2)
-    raw = resp.content[0].text
-    usage = {
-        "input_tokens": resp.usage.input_tokens,
-        "output_tokens": resp.usage.output_tokens,
-    }
-
-    data = parse_json_response(raw)
-
+    data, usage = call_and_parse(client, messages, last_t, entry["id"],
+                                 system=SYSTEM_PROMPT_A2, form_tag="A2")
     if data is None:
-        log.warning("[%s/A2] Response not valid JSON — retrying once", entry["id"])
-        messages += [
-            {"role": "assistant", "content": raw},
-            {"role": "user", "content":
-             "Your response was not valid JSON. "
-             "Return ONLY the JSON object — no markdown fences, no explanation."},
-        ]
-        resp2 = api_call(client, messages, last_t, system=SYSTEM_PROMPT_A2)
-        raw2 = resp2.content[0].text
-        usage["input_tokens"]  += resp2.usage.input_tokens
-        usage["output_tokens"] += resp2.usage.output_tokens
-        data = parse_json_response(raw2)
-
-        if data is None:
-            log.error("[%s/A2] Retry also returned invalid JSON", entry["id"])
-            return {"has_programme_declared": None, "defence_programmes": [], "defence_facilities": []}, usage
-
+        return {"has_programme_declared": None, "defence_programmes": [], "defence_facilities": []}, usage
     return {
         "has_programme_declared": data.get("has_programme_declared"),
         "defence_programmes":     data.get("defence_programmes") or [],
@@ -1143,33 +1110,10 @@ def process_entry_f(
         f"{text}"
     )
     messages: list[dict] = [{"role": "user", "content": user_content}]
-
-    resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_F)
-    raw  = resp.content[0].text
-    usage = {
-        "input_tokens":  resp.usage.input_tokens,
-        "output_tokens": resp.usage.output_tokens,
-    }
-
-    data = parse_json_response(raw)
-
+    data, usage = call_and_parse(client, messages, last_t, entry_id,
+                                 system=SYSTEM_PROMPT_F, form_tag="F")
     if data is None:
-        log.warning("[%s/F] Response not valid JSON — retrying once", entry_id)
-        messages += [
-            {"role": "assistant", "content": raw},
-            {"role": "user", "content":
-             "Your response was not valid JSON. "
-             "Return ONLY the JSON object — no markdown fences, no explanation."},
-        ]
-        resp2 = api_call(client, messages, last_t, system=SYSTEM_PROMPT_F)
-        raw2  = resp2.content[0].text
-        usage["input_tokens"]  += resp2.usage.input_tokens
-        usage["output_tokens"] += resp2.usage.output_tokens
-        data = parse_json_response(raw2)
-
-        if data is None:
-            log.error("[%s/F] Retry also returned invalid JSON", entry_id)
-            data = {}
+        data = {}
 
     data["extraction_metadata"] = {
         "source_id":    entry_id,
@@ -1240,34 +1184,13 @@ def process_entry_e(
 
     messages = [{"role": "user", "content": text}]
     try:
-        resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_E)
+        data, usage = call_and_parse(client, messages, last_t, entry_id,
+                                     system=SYSTEM_PROMPT_E, form_tag="E")
     except Exception as exc:
         log.error("[%s/E] API error: %s", entry_id, exc)
         return {"id": entry_id, "status": "error", "error": str(exc)}
-
-    raw = resp.content[0].text.strip()
-    usage = {"input_tokens": resp.usage.input_tokens,
-             "output_tokens": resp.usage.output_tokens}
-    data = parse_json_response(raw)
-
     if data is None:
-        log.warning("[%s/E] JSON parse failed; retrying", entry_id)
-        messages.append({"role": "assistant", "content": raw})
-        messages.append({"role": "user",
-                         "content": "Return only valid JSON, no other text."})
-        try:
-            resp2 = api_call(client, messages, last_t, system=SYSTEM_PROMPT_E)
-        except Exception as exc:
-            log.error("[%s/E] retry error: %s", entry_id, exc)
-            return {"id": entry_id, "status": "error", "error": str(exc)}
-        raw2 = resp2.content[0].text.strip()
-        usage["input_tokens"]  += resp2.usage.input_tokens
-        usage["output_tokens"] += resp2.usage.output_tokens
-        data = parse_json_response(raw2)
-        if data is None:
-            log.error("[%s/E] JSON parse failed after retry; raw=%r", entry_id, raw2[:200])
-            return {"id": entry_id, "status": "error",
-                    "calls": 2, **usage, "raw": raw2}
+        return {"id": entry_id, "status": "error", "calls": 2, **usage}
 
     cats = data.get("categories") or {}
     log.info("[%s/E] prohibitions=%s exports=%s | in=%d out=%d tokens",

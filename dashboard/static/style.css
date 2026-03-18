@@ -165,7 +165,7 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
     position: absolute;
     top: calc(100% + 4px);
     left: 0; right: 0;
-    z-index: 2000;
+    z-index: 2010;
     background: #1a1c2e;
     border: 1px solid #3a3a5a;
     border-radius: 6px;
@@ -1408,8 +1408,19 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     /* Map: full width, full remaining height */
     #map { flex: 1; width: 100%; }
 
-    /* Filter panel: wider on mobile, collapsed by default (handled in JS) */
-    #filter-panel { width: calc(100vw - 20px); max-width: 300px; }
+    /* Filter panel: offset right to clear sidebar toggle button */
+    #filter-panel { left: 48px; width: calc(100vw - 58px); max-width: 280px; }
+
+    /* Review queue: admin feature, hidden on mobile */
+    #navbar-review { display: none !important; }
+
+    /* Touch targets: ensure adequate tap area (WCAG minimum ~44px) */
+    #back-btn { padding: 4px 10px; }
+    #fp-collapse { padding: 6px 10px; }
+    .dtab { padding: 10px 12px; }
+    .dsubtab { padding: 8px 14px; }
+    .fp-play-btn { width: 36px; height: 36px; }
+    .fp-organism-clear { padding: 4px 8px; }
 
     /* Legend: hidden on mobile (too much screen real estate) */
     .map-legend { display: none; }

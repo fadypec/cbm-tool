@@ -7,7 +7,8 @@ const RESTRICTED = new Set(['CHN', 'FRA', 'RUS', 'IND']);
 // This GeoJSON dataset gives France ISO code '-99'; match by name as fallback
 const RESTRICTED_NAMES = new Set(['France']);
 
-// BWC membership status (as of 2025: 189 states parties)
+// BWC membership status (as of 2025-01: 189 states parties, 4 signatories, 9 non-parties).
+// Update if a state ratifies or accedes — see https://disarmament.unoda.org/wmd/bio/
 const BWC_SIGNATORIES = new Set(['EGY', 'HTI', 'SOM', 'SYR']);
 const BWC_NON_PARTIES = new Set(['TCD', 'COM', 'DJI', 'ERI', 'ISR', 'FSM', 'NAM', 'SSD', 'TUV']);
 

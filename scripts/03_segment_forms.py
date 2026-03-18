@@ -383,7 +383,7 @@ PAGE INDEX:
 """
 
     log.info("[%s] Calling Claude API for LLM segmentation fallback", entry_id)
-    time.sleep(8)   # respect rate limits when multiple docs need LLM fallback
+    time.sleep(10)  # match RATE_LIMIT_DELAY in script 04 (≤6 req/min)
     message = client.messages.create(
         model=MODEL,
         max_tokens=512,
