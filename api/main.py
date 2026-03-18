@@ -227,6 +227,12 @@ def favicon():
 
 # ── /api/stats ───────────────────────────────────────────────────────────────
 
+@app.get("/health", include_in_schema=False)
+def health():
+    """Lightweight healthcheck — no DB query, always returns 200 when the process is alive."""
+    return {"status": "ok"}
+
+
 @app.get("/api/stats", summary="Global summary statistics")
 @limiter.limit("60/minute")
 def api_stats(request: Request):
