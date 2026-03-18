@@ -234,6 +234,35 @@ def health():
     return {"status": "ok"}
 
 
+# ── /api/bwc-membership ──────────────────────────────────────────────────────
+
+# BWC membership status for countries not in the submitting-countries list.
+# "restricted"  — submits to the ISU but data is not publicly released
+# "signatory"   — signed but not ratified the BWC
+# "non_party"   — neither signed nor ratified
+# Last verified: 2025-01  Source: https://disarmament.unoda.org/wmd/bio/
+_BWC_MEMBERSHIP: dict[str, str] = {
+    # Restricted — data submitted but not public
+    "CHN": "restricted", "FRA": "restricted", "RUS": "restricted", "IND": "restricted",
+    # Signatories (signed, not ratified)
+    "EGY": "signatory",  "HTI": "signatory",  "SOM": "signatory",  "SYR": "signatory",
+    # Non-parties
+    "TCD": "non_party",  "COM": "non_party",  "DJI": "non_party",  "ERI": "non_party",
+    "ISR": "non_party",  "FSM": "non_party",  "NAM": "non_party",  "SSD": "non_party",
+    "TUV": "non_party",
+}
+
+
+@app.get("/api/bwc-membership", summary="BWC membership status by ISO3")
+@limiter.limit("60/minute")
+def api_bwc_membership(request: Request):
+    return {
+        "last_updated": "2025-01",
+        "source": "https://disarmament.unoda.org/wmd/bio/",
+        "membership": _BWC_MEMBERSHIP,
+    }
+
+
 # ── /api/stats ───────────────────────────────────────────────────────────────
 
 @app.get("/api/stats", summary="Global summary statistics")
@@ -351,47 +380,19 @@ def api_country_defence(iso3: str):
         """, (iso3,))
         programmes = [dict(r) for r in cur.fetchall()]
 
-        # Prefer the defence_entities canonical table (populated by migration 009);
-        # fall back to the slower self-join if the table doesn't exist yet.
-        entities = []
-        try:
-            cur.execute("""
-                SELECT de.canonical_defence_facility_id AS canonical_id,
-                       de.canonical_name, de.first_year, de.last_year,
-                       BOOL_OR(df.bsl4_area_m2 > 0) AS has_bsl4,
-                       BOOL_OR(df.bsl3_area_m2 > 0) AS has_bsl3
-                FROM defence_entities de
-                LEFT JOIN defence_facilities df USING (canonical_defence_facility_id)
-                WHERE de.country_iso3 = %s
-                GROUP BY de.canonical_defence_facility_id, de.canonical_name,
-                         de.first_year, de.last_year
-                ORDER BY de.canonical_name
-            """, (iso3,))
-            rows = cur.fetchall()
-            if rows:
-                entities = [dict(r) for r in rows]
-        except Exception:
-            pass  # Table not yet migrated; fall through to self-join
-
-        if not entities:
-            cur.execute("""
-                SELECT
-                    d.canonical_defence_facility_id AS canonical_id,
-                    (SELECT df2.facility_name
-                     FROM defence_facilities df2
-                     WHERE df2.canonical_defence_facility_id = d.canonical_defence_facility_id
-                     ORDER BY df2.year DESC LIMIT 1) AS canonical_name,
-                    MIN(d.year) AS first_year,
-                    MAX(d.year) AS last_year,
-                    BOOL_OR(d.bsl4_area_m2 IS NOT NULL AND d.bsl4_area_m2 > 0) AS has_bsl4,
-                    BOOL_OR(d.bsl3_area_m2 IS NOT NULL AND d.bsl3_area_m2 > 0) AS has_bsl3
-                FROM defence_facilities d
-                WHERE d.country_iso3 = %s
-                  AND d.canonical_defence_facility_id IS NOT NULL
-                GROUP BY d.canonical_defence_facility_id
-                ORDER BY canonical_name
-            """, (iso3,))
-            entities = [dict(r) for r in cur.fetchall()]
+        cur.execute("""
+            SELECT de.canonical_defence_facility_id AS canonical_id,
+                   de.canonical_name, de.first_year, de.last_year,
+                   BOOL_OR(df.bsl4_area_m2 > 0) AS has_bsl4,
+                   BOOL_OR(df.bsl3_area_m2 > 0) AS has_bsl3
+            FROM defence_entities de
+            LEFT JOIN defence_facilities df USING (canonical_defence_facility_id)
+            WHERE de.country_iso3 = %s
+            GROUP BY de.canonical_defence_facility_id, de.canonical_name,
+                     de.first_year, de.last_year
+            ORDER BY de.canonical_name
+        """, (iso3,))
+        entities = [dict(r) for r in cur.fetchall()]
 
         # All year records (for detail within the entity modal)
         cur.execute("""

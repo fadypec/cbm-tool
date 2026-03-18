@@ -7,10 +7,9 @@ const RESTRICTED = new Set(['CHN', 'FRA', 'RUS', 'IND']);
 // This GeoJSON dataset gives France ISO code '-99'; match by name as fallback
 const RESTRICTED_NAMES = new Set(['France']);
 
-// BWC membership status (as of 2025-01: 189 states parties, 4 signatories, 9 non-parties).
-// Update if a state ratifies or accedes — see https://disarmament.unoda.org/wmd/bio/
-const BWC_SIGNATORIES = new Set(['EGY', 'HTI', 'SOM', 'SYR']);
-const BWC_NON_PARTIES = new Set(['TCD', 'COM', 'DJI', 'ERI', 'ISR', 'FSM', 'NAM', 'SSD', 'TUV']);
+// BWC membership status — fetched from /api/bwc-membership on startup.
+// Maps ISO3 → 'restricted' | 'signatory' | 'non_party'; absence = full BWC state party.
+let bwcMembership = {};
 
 // Choropleth layer styles — shared between loadChoropleth() and updateChoropleth()
 const CHORO_STYLE_RESTRICTED  = { fillColor: '#5c3370', fillOpacity: 0.65, weight: 0.5, color: '#999',    opacity: 0.6 };
@@ -87,7 +86,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     restoreFromHash();
 
     try {
-        const [stats, countries, a1, a2, vaccines, compliance, transparency] = await Promise.all([
+        const [stats, countries, a1, a2, vaccines, compliance, transparency, membershipResp] = await Promise.all([
             api('/api/stats'),
             api('/api/countries'),
             api('/api/map/facilities'),
@@ -96,7 +95,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             api('/api/map/compliance'),
             // Transparency index loaded in parallel; non-critical so errors are swallowed below
             api('/api/countries/transparency').catch(() => []),
+            // BWC membership — must resolve before loadChoropleth(); errors degrade gracefully
+            api('/api/bwc-membership').catch(() => ({})),
         ]);
+        if (membershipResp && membershipResp.membership) {
+            bwcMembership = membershipResp.membership;
+        }
 
         renderStats(stats);
         initYearSlider(stats.year_min, stats.year_max);
@@ -873,16 +877,16 @@ function updateChoropleth(rates) {
         const feature = layer.feature;
         const iso3 = feature.properties['ISO3166-1-Alpha-3'];
         const name = feature.properties.name;
-        const isRestricted = RESTRICTED.has(iso3) || RESTRICTED_NAMES.has(name);
+        const isRestricted = bwcMembership[iso3] === 'restricted' || RESTRICTED_NAMES.has(name);
 
         if (!isRestricted) {
             const d = rates[iso3];
             let newStyle;
             if (d) {
                 newStyle = CHORO_STYLE_CBM(choroColor(+d.a1_rate));
-            } else if (BWC_NON_PARTIES.has(iso3)) {
+            } else if (bwcMembership[iso3] === 'non_party') {
                 newStyle = CHORO_STYLE_NON_PARTY;
-            } else if (BWC_SIGNATORIES.has(iso3)) {
+            } else if (bwcMembership[iso3] === 'signatory') {
                 newStyle = CHORO_STYLE_SIGNATORY;
             } else {
                 newStyle = CHORO_STYLE_NO_DATA;
@@ -894,9 +898,9 @@ function updateChoropleth(rates) {
             let bwcStatus;
             if (d2) {
                 bwcStatus = `${d2.submission_count} public submission${d2.submission_count !== 1 ? 's' : ''}`;
-            } else if (BWC_NON_PARTIES.has(iso3)) {
+            } else if (bwcMembership[iso3] === 'non_party') {
                 bwcStatus = 'Not a BWC member';
-            } else if (BWC_SIGNATORIES.has(iso3)) {
+            } else if (bwcMembership[iso3] === 'signatory') {
                 bwcStatus = 'BWC signatory (signed, not ratified)';
             } else {
                 bwcStatus = 'BWC state party — no public CBM data';
@@ -947,7 +951,7 @@ async function loadChoropleth() {
             style: feature => {
                 const iso3 = feature.properties['ISO3166-1-Alpha-3'];
                 const name = feature.properties.name;
-                const isRestricted = RESTRICTED.has(iso3) || RESTRICTED_NAMES.has(name);
+                const isRestricted = bwcMembership[iso3] === 'restricted' || RESTRICTED_NAMES.has(name);
                 if (isRestricted) {
                     return CHORO_STYLE_RESTRICTED;
                 }
@@ -956,10 +960,10 @@ async function loadChoropleth() {
                     return CHORO_STYLE_CBM(choroColor(+d.a1_rate));
                 }
                 // No CBM data — style by BWC membership
-                if (BWC_NON_PARTIES.has(iso3)) {
+                if (bwcMembership[iso3] === 'non_party') {
                     return CHORO_STYLE_NON_PARTY;
                 }
-                if (BWC_SIGNATORIES.has(iso3)) {
+                if (bwcMembership[iso3] === 'signatory') {
                     return CHORO_STYLE_SIGNATORY;
                 }
                 // BWC state party but no public CBM data
@@ -968,7 +972,7 @@ async function loadChoropleth() {
             onEachFeature: (feature, layer) => {
                 const iso3 = feature.properties['ISO3166-1-Alpha-3'];
                 const name = feature.properties.name;
-                const isRestricted = RESTRICTED.has(iso3) || RESTRICTED_NAMES.has(name);
+                const isRestricted = bwcMembership[iso3] === 'restricted' || RESTRICTED_NAMES.has(name);
                 const d = complianceRates[iso3];
 
                 let bwcStatus;
@@ -976,9 +980,9 @@ async function loadChoropleth() {
                     bwcStatus = 'Submitted CBM (restricted — not public)';
                 } else if (d) {
                     bwcStatus = `${d.submission_count} public submission${d.submission_count !== 1 ? 's' : ''}`;
-                } else if (BWC_NON_PARTIES.has(iso3)) {
+                } else if (bwcMembership[iso3] === 'non_party') {
                     bwcStatus = 'Not a BWC member';
-                } else if (BWC_SIGNATORIES.has(iso3)) {
+                } else if (bwcMembership[iso3] === 'signatory') {
                     bwcStatus = 'BWC signatory (signed, not ratified)';
                 } else {
                     bwcStatus = 'BWC state party — no public CBM data';
