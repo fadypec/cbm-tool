@@ -88,6 +88,144 @@ MERGES = [
     # Slovakia — 5 null-named single-year entities (AUDIT_DATA §1E)
     ("SVK_001", ["SVK_002", "SVK_003", "SVK_004", "SVK_005"],
         None),
+
+    # Ireland — typographic variation + appended hospital name (same BSL-3, same agents, no year overlap)
+    ("IRL_002", ["IRL_008", "IRL_023"],
+        "Public Health Laboratory (PHL), Cherry Orchard Hospital"),
+
+    # ── Ireland — systematic scan (2026-03-18) ──────────────────────────────
+    # Same city/address, same BSL, same agents, no overlapping years throughout.
+    ("IRL_001", ["IRL_005"],
+        "National Viral Reference Laboratory (NVRL), University College Dublin"),
+    ("IRL_006", ["IRL_024"],
+        "Department of Agriculture, Food and the Marine (DAFM) Laboratories"),
+    ("IRL_007", ["IRL_010"],
+        "Veterinary Sciences Centre, University College Dublin"),
+    ("IRL_009", ["IRL_013", "IRL_017", "IRL_020"],
+        "Galway University Hospital"),
+    ("IRL_011", ["IRL_015"],
+        "Institute for Molecular Medicine, Trinity College Dublin"),
+    ("IRL_012", ["IRL_018"],
+        "School of Medicine, Centre for Research in Infectious Diseases, UCD"),
+    ("IRL_014", ["IRL_021", "IRL_026"],
+        "Sample Processing Laboratory, HRB Clinical Research Facility"),
+    ("IRL_019", ["IRL_022", "IRL_025", "IRL_029"],
+        "Research Pharmacy, HRB Clinical Research Facility"),
+    ("IRL_003", ["IRL_030"],
+        "National Salmonella, Shigella, Listeria Reference Laboratory (NSSLRL)"),
+    ("IRL_004", ["IRL_031"],
+        "Marine Institute"),
+
+    # ── Austria ──────────────────────────────────────────────────────────────
+    ("AUT_001", ["AUT_002"],
+        "Federal Ministry of Defence — NBC & Environmental Protection Technology"),
+
+    # ── Germany — additional merges ──────────────────────────────────────────
+    ("DEU_014", ["DEU_016"],
+        "Centre for Biological Threats and Special Pathogens (ZBS), Robert Koch Institute"),
+    ("DEU_003", ["DEU_005", "DEU_012"],
+        "Friedrich-Loeffler-Institut"),
+    ("DEU_001", ["DEU_007"],
+        "Institute of Virology, Charité Berlin"),
+    ("DEU_002", ["DEU_006"],
+        "Central Institute of Cancer Research, Berlin-Buch"),
+
+    # ── Finland ──────────────────────────────────────────────────────────────
+    # KTL → THL → Finnish Institute for Health and Welfare (same Helsinki address)
+    ("FIN_002", ["FIN_009", "FIN_010", "FIN_011"],
+        "Finnish Institute for Health and Welfare (THL)"),
+    # PVTT → FDRA (same Lakiala address)
+    ("FIN_006", ["FIN_015"],
+        "Finnish Defence Research Agency (FDRA)"),
+    ("FIN_018", ["FIN_019"],
+        "Finnish Defence Forces, Centre for Military Medicine"),
+    # Wellbeing services county added to name (same Turku address)
+    ("FIN_020", ["FIN_021", "FIN_023"],
+        "University of Turku, Institute of Biomedicine / Tyks Laboratories"),
+    # Department of Virology parent entity → Viral Zoonoses continuation
+    ("FIN_004", ["FIN_017"],
+        "Department of Virology, University of Helsinki"),
+
+    # ── Romania ──────────────────────────────────────────────────────────────
+    # Pasteur Institute SA chain — same 333 Giulesti address throughout
+    ("ROU_007", ["ROU_011", "ROU_014", "ROU_016", "ROU_017", "ROU_020", "ROU_021", "ROU_022"],
+        "National Society Pasteur Institute SA"),
+    # Cantacuzino: civilian → military takeover (same Bucharest address)
+    ("ROU_008", ["ROU_015", "ROU_018"],
+        "Cantacuzino National Medico-Military Institute"),
+
+    # ── Latvia ───────────────────────────────────────────────────────────────
+    # Hospital org-name evolution (same 3 Linezera Street, Riga)
+    ("LVA_001", ["LVA_003", "LVA_004", "LVA_005", "LVA_007"],
+        "Riga East University Hospital, National Microbiology Reference Laboratory"),
+
+    # ── Sweden ───────────────────────────────────────────────────────────────
+    # SMI → Public Health Agency → PHAS (same Solna BSL-4 lab)
+    ("SWE_002", ["SWE_006", "SWE_007", "SWE_008", "SWE_009", "SWE_010"],
+        "High Containment Laboratory, Public Health Agency of Sweden"),
+    # FOI division name variants (same Umeå address)
+    ("SWE_001", ["SWE_004", "SWE_005"],
+        "Swedish Defence Research Agency (FOI)"),
+
+    # ── USA — additional merges ──────────────────────────────────────────────
+    ("USA_001", ["USA_008"],
+        "Viral Immunology Center, National B Virus Resource Laboratory"),
+    ("USA_002", ["USA_015"],
+        "Betty Slick and Lewis J. Moorman Jr. Laboratory Complex"),
+
+    # ── Hungary ──────────────────────────────────────────────────────────────
+    ("HUN_002", ["HUN_004"],
+        "National Biosafety Laboratory (NBL)"),
+
+    # ── Czech Republic ───────────────────────────────────────────────────────
+    ("CZE_006", ["CZE_016"],
+        "Laboratory for Biological Monitoring and Protection"),
+    ("CZE_005", ["CZE_017"],
+        "Military Health Institute, Těchonín"),
+    ("CZE_004", ["CZE_013"],
+        "Institute of Molecular Pathology (IMP)"),
+
+    # ── Slovenia ─────────────────────────────────────────────────────────────
+    ("SVN_003", ["SVN_005"],
+        "Mobile Laboratory"),
+
+    # ── Lithuania ────────────────────────────────────────────────────────────
+    ("LTU_003", ["LTU_005"],
+        "National Veterinary Laboratory"),
+    ("LTU_002", ["LTU_006"],
+        "Centre for Communicable Diseases and AIDS"),
+
+    # ── Moldova ──────────────────────────────────────────────────────────────
+    ("MDA_001", ["MDA_004"],
+        "National Agency of Public Health (NAPH)"),
+
+    # ── Portugal ─────────────────────────────────────────────────────────────
+    ("PRT_001", ["PRT_013"],
+        "Laboratório de Bromatologia e Defesa Biológica"),
+    ("PRT_006", ["PRT_010", "PRT_012"],
+        "Instituto Nacional de Investigação Agrária e Veterinária (INIAV)"),
+
+    # ── Bulgaria ─────────────────────────────────────────────────────────────
+    ("BGR_001", ["BGR_005", "BGR_006"],
+        "National Centre of Infectious and Parasitic Diseases"),
+
+    # ── Estonia ──────────────────────────────────────────────────────────────
+    # Joint Laboratories umbrella — different sub-labs appended in different years
+    ("EST_001", ["EST_005", "EST_008", "EST_016"],
+        "Joint Laboratories of Tartu University Clinics"),
+    ("EST_007", ["EST_014"],
+        "Synlab Eesti"),
+    ("EST_004", ["EST_012"],
+        "Laboratory for Mycobacteriosis, University of Life Sciences"),
+    ("EST_006", ["EST_010"],
+        "Laboratory of Communicable Diseases, Estonian Health Board"),
+    # Veterinary & Food Laboratory merged into LABRIS in 2023
+    ("EST_003", ["EST_017"],
+        "National Centre for Laboratory Research and Risk Assessment (LABRIS)"),
+
+    # ── Norway ───────────────────────────────────────────────────────────────
+    ("NOR_001", ["NOR_002"],
+        "Institute of Microbiology, Armed Forces Medical Services"),
 ]
 
 # ── Vaccine entity merge groups ───────────────────────────────────────────────
@@ -97,6 +235,64 @@ VACCINE_MERGES = [
     # Bulgaria — BulBio-NCIPD: 6 spelling variants of the same facility (AUDIT_DATA §1G)
     ("BGR_V001", ["BGR_V002", "BGR_V003", "BGR_V004", "BGR_V005", "BGR_V006"],
         "BulBio-NCIPD Ltd (National Center of Infectious and Parasitic Diseases)"),
+
+    # ── Systematic vaccine entity scan (2026-03-18) ─────────────────────────
+
+    # Czech Republic
+    ("CZE_V002", ["CZE_V006"],
+        "Sevapharma a.s."),
+    ("CZE_V004", ["CZE_V007", "CZE_V008"],
+        "Dyntec spol. s r.o."),
+
+    # Romania — corporate name evolution, same addresses throughout
+    ("ROU_V001", ["ROU_V003", "ROU_V007", "ROU_V010"],
+        "Pasteur Filiala Filipesti (Bucharest)"),
+    ("ROU_V002", ["ROU_V006", "ROU_V009"],
+        "Cantacuzino National Institute (Bucharest)"),
+    ("ROU_V004", ["ROU_V008"],
+        "Romvac Company S.A."),
+
+    # Germany — corporate restructuring / acquisitions
+    ("DEU_V008", ["DEU_V014"],
+        "BioNTech IMFS GmbH (Idar-Oberstein)"),
+    ("DEU_V007", ["DEU_V009", "DEU_V016", "DEU_V022"],
+        "CureVac (Tübingen)"),
+    ("DEU_V005", ["DEU_V019"],
+        "GlaxoSmithKline Biologicals (Dresden)"),
+    ("DEU_V020", ["DEU_V023"],
+        "Takeda GmbH (Singen)"),
+
+    # UK — agency renames + corporate acquisitions
+    ("GBR_V001", ["GBR_V002", "GBR_V009", "GBR_V017"],
+        "Porton Biopharma Limited (Porton Down)"),
+    ("GBR_V003", ["GBR_V005", "GBR_V012"],
+        "AstraZeneca Liverpool (MedImmune UK Limited)"),
+    ("GBR_V008", ["GBR_V014"],
+        "Merck BioReliance (Glasgow)"),
+    ("GBR_V011", ["GBR_V015", "GBR_V016"],
+        "Charles River (Keele Science Park)"),
+
+    # Netherlands
+    ("NLD_V001", ["NLD_V003"],
+        "Patheon Biologics BV (Groningen)"),
+    ("NLD_V002", ["NLD_V009"],
+        "Wacker Biotech B.V. (Amsterdam)"),
+
+    # Sweden — Crucell acquired by Valneva
+    ("SWE_V003", ["SWE_V005", "SWE_V006"],
+        "Valneva Sweden AB (Stockholm)"),
+
+    # USA
+    ("USA_V001", ["USA_V014"],
+        "Emergent Biosolutions (Lansing)"),
+    ("USA_V016", ["USA_V021"],
+        "Pfizer Inc / BioNTech Manufacturing GmbH"),
+
+    # Switzerland — successive corporate owners of same Thorishaus facility
+    ("CHE_V002", ["CHE_V003", "CHE_V005"],
+        "Bavarian Nordic Berna GmbH (Thorishaus)"),
+    ("CHE_V004", ["CHE_V006"],
+        "Lonza AG (Visp)"),
 ]
 
 # ── Defence entity merge groups ──────────────────────────────────────────────
@@ -157,9 +353,9 @@ DEFENCE_MERGES = [
     # IRF-Frederick (Frederick, Maryland)
     ("USA_D046", ["USA_D050"],
         "Integrated Research Facility at Fort Detrick (IRF-Frederick)"),
-    # NSWC Dahlgren CBR lab (Dahlgren, Virginia) — D061 is a different lab, kept separate
-    ("USA_D010", ["USA_D037"],
-        "Naval Surface Warfare Center (NSWC) Dahlgren Division — CBR Defense Laboratory"),
+    # NSWC Dahlgren (Dahlgren, Virginia) — CBR Defense Lab + Concepts & Experimentation Lab
+    ("USA_D010", ["USA_D037", "USA_D061"],
+        "Naval Surface Warfare Center (NSWC) Dahlgren Division"),
     # NIH CW Bill Young Center (Bethesda)
     ("USA_D020", ["USA_D042"],
         "C.W. Bill Young Center for Biodefense and Emerging Infectious Diseases (NIH)"),
@@ -181,6 +377,66 @@ DEFENCE_MERGES = [
     # CDC NCEH (Atlanta)
     ("USA_D040", ["USA_D047"],
         "CDC National Center for Environmental Health (NCEH)"),
+    # FDA White Oak / CBER (Silver Spring, MD)
+    ("USA_D054", ["USA_D057"],
+        "FDA White Oak Campus"),
+
+    # ── DEU — bilingual name variants (EN/DE alternating submissions) ──────
+    ("DEU_D002", ["DEU_D006", "DEU_D007"],
+        "Bundeswehr Institute of Microbiology"),
+    ("DEU_D001", ["DEU_D005", "DEU_D009", "DEU_D012", "DEU_D017"],
+        "CBRN Defence School (Sonthofen)"),
+    ("DEU_D003", ["DEU_D008", "DEU_D014"],
+        "Bundeswehr Research Institute for Protective Technologies — NBC Protection"),
+    ("DEU_D010", ["DEU_D011", "DEU_D013"],
+        "Centre for Biological Threats and Special Pathogens (ZBS), Robert Koch Institute"),
+    ("DEU_D004", ["DEU_D015", "DEU_D016", "DEU_D018"],
+        "Central Institute of the Bundeswehr Medical Service Kiel"),
+
+    # ── AUS — DSTO → DST Group rename chain (same Fishermans Bend address) ─
+    ("AUS_D001", ["AUS_D002", "AUS_D003", "AUS_D004", "AUS_D005"],
+        "Biological Defence Research, Defence Science and Technology Group"),
+
+    # ── NOR — abbreviated name variants (Oslo → Kjeller relocation) ────────
+    ("NOR_D001", ["NOR_D002", "NOR_D005"],
+        "Institute of Microbiology (FML)"),
+
+    # ── SWE ─────────────────────────────────────────────────────────────────
+    ("SWE_D001", ["SWE_D004"],
+        "Swedish Defence Research Agency (FOI), CBRN Defence"),
+    # National Veterinary Institute → Swedish Veterinary Agency
+    ("SWE_D002", ["SWE_D003", "SWE_D005"],
+        "Swedish Veterinary Agency (SVA)"),
+
+    # ── CZE ─────────────────────────────────────────────────────────────────
+    ("CZE_D001", ["CZE_D004", "CZE_D006"],
+        "Institute of Molecular Pathology (IMP), University of Defence"),
+    ("CZE_D005", ["CZE_D007"],
+        "Laboratory for Biological Monitoring and Protection"),
+
+    # ── ROU — same Bucharest military lab ───────────────────────────────────
+    ("ROU_D001", ["ROU_D004", "ROU_D005"],
+        "Military Medical Research Center (Bucharest)"),
+
+    # ── PRT — EN/PT language variants of same army lab ─────────────────────
+    ("PRT_D001", ["PRT_D002", "PRT_D003", "PRT_D004"],
+        "Laboratório de Bromatologia e Defesa Biológica (LBDB)"),
+
+    # ── DNK — Biological Defence → Biosecurity rename (same CBB abbreviation)
+    ("DNK_D001", ["DNK_D002"],
+        "Centre for Biosecurity and Biopreparedness (CBB)"),
+
+    # ── LVA — hospital org-name evolution (same Riga address) ──────────────
+    ("LVA_D001", ["LVA_D002", "LVA_D003", "LVA_D004"],
+        "Riga East University Hospital, National Microbiology Reference Laboratory"),
+
+    # ── BGR ─────────────────────────────────────────────────────────────────
+    ("BGR_D001", ["BGR_D002"],
+        "National Center of Infectious and Parasitic Diseases"),
+
+    # ── FIN — added parent org prefix ──────────────────────────────────────
+    ("FIN_D001", ["FIN_D004"],
+        "Centre for Biothreat Preparedness"),
 ]
 
 
