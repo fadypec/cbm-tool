@@ -218,7 +218,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.mount("/static", StaticFiles(directory=DASHBOARD_DIR / "static"), name="static")
 
 
-@app.get("/", include_in_schema=False)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 def index():
     return FileResponse(DASHBOARD_DIR / "index.html")
 
