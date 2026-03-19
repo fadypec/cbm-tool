@@ -22,6 +22,8 @@ Usage:
 """
 
 import argparse
+import base64
+import io
 import json
 import logging
 import os
@@ -53,6 +55,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CATALOGUE_PATH = PROJECT_ROOT / "data" / "catalogue.json"
 SEGMENTED_DIR  = PROJECT_ROOT / "data" / "segmented"
 STRUCTURED_DIR = PROJECT_ROOT / "data" / "structured"
+RAW_PDFS_DIR   = PROJECT_ROOT / "data" / "raw_pdfs"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -102,6 +105,269 @@ PROGRESS_INTERVAL = 10             # emit a log.info progress line every N docum
 # "Yes/No" template text without typographic distinction — Claude needs the full
 # law listings to infer which option applies. Max doc is ~29KB, cost is trivial.
 FORM_E_MAX_CHARS = None            # no truncation
+
+# ── Form E Vision helpers ────────────────────────────────────────────────
+# Form E rarely exceeds 14 pages; guard against segmentation bugs.
+MAX_VISION_PAGES = 20
+
+_PAGE_MARKER_RE = re.compile(r"^--- PAGE (\d+) ---$", re.MULTILINE)
+
+
+def _form_e_page_numbers(form_text_path: Path) -> list[int]:
+    """Extract 1-indexed PDF page numbers from segmented form_e.txt markers.
+
+    The segmentation script inserts '--- PAGE N ---' headers.  Returns a
+    sorted, deduplicated list of page numbers found in the file.
+    """
+    text = form_text_path.read_text(encoding="utf-8")
+    return sorted(set(int(m.group(1)) for m in _PAGE_MARKER_RE.finditer(text)))
+
+
+def _render_pages_as_base64(
+    pdf_path: Path,
+    pages: list[int],
+    dpi: int = 300,
+) -> list[dict]:
+    """Render specific PDF pages to base64-encoded PNG content blocks.
+
+    Returns a list of Anthropic Vision content blocks ready for insertion
+    into a messages list:
+        [{"type": "image", "source": {"type": "base64",
+          "media_type": "image/png", "data": "..."}}, ...]
+
+    Uses 300 DPI for sharp rendering of thin formatting marks (strikethrough
+    lines, underlines).  Each page is typically ~200 KB as PNG, well within
+    Anthropic's 5 MB per-image limit.
+    """
+    from pdf2image import convert_from_path
+
+    blocks: list[dict] = []
+    for page_num in pages:
+        imgs = convert_from_path(
+            str(pdf_path), dpi=dpi,
+            first_page=page_num, last_page=page_num,
+        )
+        buf = io.BytesIO()
+        imgs[0].save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": b64,
+            },
+        })
+    return blocks
+
+
+# ── Form E table layout ─────────────────────────────────────────────────
+
+_FORM_E_ROW_NAMES = ("(a) Prohibitions", "(b) Exports",
+                     "(c) Imports", "(d) Biosafety")
+_FORM_E_COL_NAMES = ("Legislation", "Regulations",
+                     "Other measures", "Amended")
+
+
+def _detect_form_e_formatting(
+    pdf_path: Path,
+    page_nums: list[int],
+) -> str | None:
+    """Detect strikethrough/underline on Form E Yes/No values via pdfplumber.
+
+    The Form E table has 4 rows × 4 columns of Yes/No cells.  Many countries
+    use strikethrough to reject an option (thin ~0.5pt rects drawn over text)
+    or underline to select one.  These formatting marks are invisible in
+    extracted text but detectable as PDF rectangle objects via pdfplumber.
+
+    Handles two word formats:
+      - Combined "Yes/No" tokens: rect position (left vs right half of word)
+        determines which option is struck through.
+      - Separate "Yes" and "No" words: direct rect-to-word overlap matching.
+
+    Returns a formatted annotation string for prepending to the extracted
+    text, or None if no relevant formatting marks are found.
+    """
+    import pdfplumber
+
+    # Geometry thresholds (PDF points)
+    RECT_MAX_HEIGHT = 2.0     # strikethrough/underline rects are ~0.5pt tall
+    RECT_MIN_WIDTH = 5.0      # must span at least part of a word
+    VERT_TOLERANCE = 4.0      # rect-to-word vertical proximity
+    ROW_CLUSTER = 12.0        # words within 12pt vertically → same table row
+
+    # Each cell gets a resolved value: Yes / No / unknown
+    cells: list[dict] = []    # {top, x0, value, page}
+
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        for pn in page_nums:
+            if pn < 1 or pn > len(pdf.pages):
+                continue
+            page = pdf.pages[pn - 1]
+            words = page.extract_words() or []
+            rects = page.rects or []
+
+            # Thin horizontal rects = strikethrough or underline candidates
+            thin_rects = [
+                r for r in rects
+                if abs(r["bottom"] - r["top"]) < RECT_MAX_HEIGHT
+                and (r["x1"] - r["x0"]) > RECT_MIN_WIDTH
+            ]
+            if not thin_rects:
+                continue
+
+            # Detect word format: combined "Yes/No" vs separate "Yes" + "No"
+            combined = [w for w in words
+                        if w["text"].strip().lower() in ("yes/no", "oui/non")]
+            separate_yes = [w for w in words
+                           if w["text"].strip().lower() in ("yes", "oui")]
+            separate_no = [w for w in words
+                          if w["text"].strip().lower() in ("no", "non")]
+
+            if combined:
+                # Combined "Yes/No" — each word is one cell.
+                # A rect on the left half strikes through "Yes" (→ value=No);
+                # a rect on the right half strikes through "No" (→ value=Yes).
+                for w in combined:
+                    w_mid_x = (w["x0"] + w["x1"]) / 2
+                    w_mid_y = (w["top"] + w["bottom"]) / 2
+                    value = "unknown"
+
+                    for r in thin_rects:
+                        if r["x1"] < w["x0"] or r["x0"] > w["x1"]:
+                            continue
+                        r_mid_y = (r["top"] + r["bottom"]) / 2
+
+                        # Strikethrough at word midline
+                        if abs(r_mid_y - w_mid_y) < VERT_TOLERANCE:
+                            r_mid_x = (r["x0"] + r["x1"]) / 2
+                            # Left half = "Yes" struck through → No
+                            # Right half = "No" struck through → Yes
+                            value = "No" if r_mid_x < w_mid_x else "Yes"
+                            break
+
+                        # Underline at word bottom
+                        if abs(r_mid_y - w["bottom"]) < VERT_TOLERANCE:
+                            r_mid_x = (r["x0"] + r["x1"]) / 2
+                            # Left half = "Yes" underlined → Yes
+                            # Right half = "No" underlined → No
+                            value = "Yes" if r_mid_x < w_mid_x else "No"
+                            break
+
+                    cells.append({
+                        "top": w["top"], "x0": w["x0"],
+                        "value": value, "page": pn,
+                    })
+
+            elif separate_yes or separate_no:
+                # Separate "Yes" and "No" words — check each for formatting,
+                # then pair by proximity to resolve cell values.
+                word_info: list[dict] = []
+                for w in separate_yes + separate_no:
+                    w_mid_y = (w["top"] + w["bottom"]) / 2
+                    formatting = None
+
+                    for r in thin_rects:
+                        if r["x1"] < w["x0"] or r["x0"] > w["x1"]:
+                            continue
+                        r_mid_y = (r["top"] + r["bottom"]) / 2
+                        if abs(r_mid_y - w_mid_y) < VERT_TOLERANCE:
+                            formatting = "strikethrough"
+                            break
+                        if abs(r_mid_y - w["bottom"]) < VERT_TOLERANCE:
+                            formatting = "underline"
+                            break
+
+                    word_info.append({
+                        "text": w["text"].strip().lower(),
+                        "top": w["top"], "x0": w["x0"],
+                        "formatting": formatting,
+                    })
+
+                # Group into row clusters then pair Yes+No within each row
+                word_info.sort(key=lambda wi: (wi["top"], wi["x0"]))
+                wi_rows: list[list[dict]] = []
+                for wi in word_info:
+                    if (not wi_rows
+                            or abs(wi["top"] - wi_rows[-1][0]["top"])
+                            > ROW_CLUSTER):
+                        wi_rows.append([wi])
+                    else:
+                        wi_rows[-1].append(wi)
+
+                for row in wi_rows:
+                    row.sort(key=lambda wi: wi["x0"])
+                    for ci in range(0, len(row), 2):
+                        pair = row[ci : ci + 2]
+                        if len(pair) == 2:
+                            w1, w2 = pair
+                            is_yes = w1["text"] in ("yes", "oui")
+                            yes_w = w1 if is_yes else w2
+                            no_w = w2 if is_yes else w1
+
+                            if no_w["formatting"] == "strikethrough":
+                                value = "Yes"
+                            elif yes_w["formatting"] == "strikethrough":
+                                value = "No"
+                            elif yes_w["formatting"] == "underline":
+                                value = "Yes"
+                            elif no_w["formatting"] == "underline":
+                                value = "No"
+                            else:
+                                value = "unknown"
+                        else:
+                            value = "unknown"
+
+                        cells.append({
+                            "top": pair[0]["top"], "x0": pair[0]["x0"],
+                            "value": value, "page": pn,
+                        })
+
+    if not cells or not any(c["value"] != "unknown" for c in cells):
+        return None
+
+    # ── Group cells into table rows by y-position ────────────────────
+    cells.sort(key=lambda c: (c["top"], c["x0"]))
+    rows: list[list[dict]] = []
+    for c in cells:
+        if not rows or abs(c["top"] - rows[-1][0]["top"]) > ROW_CLUSTER:
+            rows.append([c])
+        else:
+            rows[-1].append(c)
+
+    # ── Format annotation ────────────────────────────────────────────
+    lines = [
+        "[PDF FORMATTING ANALYSIS — Form E Table]",
+        "Detected formatting marks on Yes/No values in the original PDF.",
+        "Strikethrough = REJECTED option; underline = SELECTED option.",
+        "",
+    ]
+
+    for row_idx, row_cells in enumerate(rows):
+        row_cells.sort(key=lambda c: c["x0"])
+        label = (_FORM_E_ROW_NAMES[row_idx]
+                 if row_idx < len(_FORM_E_ROW_NAMES)
+                 else f"Row {row_idx + 1}")
+
+        parts: list[str] = []
+        for col_idx, cell in enumerate(row_cells):
+            col = (_FORM_E_COL_NAMES[col_idx]
+                   if col_idx < len(_FORM_E_COL_NAMES)
+                   else f"Col {col_idx + 1}")
+            parts.append(f"{col}={cell['value']}")
+
+        lines.append(f"  {label}: {', '.join(parts)}")
+
+    lines.extend([
+        "",
+        "[END FORMATTING ANALYSIS]",
+        "",
+        "Use the values above for the Form E table. For any 'unknown' cells,",
+        "infer from the narrative text below.",
+        "",
+    ])
+
+    return "\n".join(lines)
 
 
 # ── System prompt ─────────────────────────────────────────────────────────────
@@ -338,6 +604,77 @@ narrative text and listed legislation: \
 - Keep key_laws to the most specific implementing legislation (max ~15 entries); \
 skip generic constitutional provisions unless they are the sole measure
 - Translation: if the document is not in English, translate all string values; \
+set translated=true\
+"""
+
+SYSTEM_PROMPT_E_VISION = """\
+You are extracting structured data from a BWC Confidence-Building Measure \
+submission (Form E: Declaration of Legislation, Regulations and Other Measures).
+
+You are given one or more PAGE IMAGES from the original PDF.  Read the \
+Form E table directly from the image.
+
+The table has four rows and four columns:
+  Rows (categories):
+    (a) Prohibitions — development, production, stockpiling, acquisition/retention \
+(Article I)
+    (b) Exports of micro-organisms and toxins
+    (c) Imports of micro-organisms and toxins
+    (d) Biosafety and biosecurity
+  Columns: Legislation | Regulations | Other measures | Amended since last year
+
+Each cell should contain Yes or No.  Countries mark their selection in \
+different ways:
+  - STRIKETHROUGH on the rejected option (a thin horizontal line drawn \
+through "Yes" or "No" — look very carefully, the line may be faint)
+  - Bold or underline on the selected option
+  - Circling or handwritten marks
+The selected value is the one WITHOUT strikethrough / the one WITH \
+bold/underline/circle.  Examine each cell closely for any visual \
+difference between "Yes" and "No".
+
+If the table shows only template text "Yes/No" with NO visual formatting \
+at all (both options appear identical), infer values from any surrounding \
+narrative text listing specific laws or regulations:
+  (1) legislation=true for a category if a specific law or act addresses it; \
+  (2) regulations=true if a government decree or regulation addresses it; \
+  (3) other_measures=true if a standard, guideline, or other non-legislative \
+measure does; \
+  (4) category mapping: BWC/biological weapons prohibition laws → prohibitions; \
+      export/import controls, dual-use trade laws → exports AND imports; \
+      biosafety standards, infectious disease laws → biosafety; \
+  (5) amended=true only if text explicitly mentions a recent amendment; \
+  (6) if narrative sections are explicitly labelled "(a)", "(b)", "(c)", "(d)" \
+      matching the form rows, use those labels directly; otherwise infer from \
+      keywords; \
+  (7) if the narrative describes a comprehensive framework covering all four \
+      categories, set all applicable fields to true; \
+  (8) only leave a field null if genuinely no indication exists in either the \
+      table or narrative
+
+Return ONLY valid JSON, no preamble:
+{
+  "categories": {
+    "prohibitions": {
+      "legislation": true/false/null,
+      "regulations": true/false/null,
+      "other_measures": true/false/null,
+      "amended": true/false/null
+    },
+    "exports": { ... same fields ... },
+    "imports": { ... same fields ... },
+    "biosafety": { ... same fields ... }
+  },
+  "key_laws": ["short name of law or regulation", ...],
+  "translated": true/false,
+  "confidence": 0.0-1.0,
+  "notes": "any issues or observations, or null"
+}
+
+Additional rules:
+- "Nothing to declare" → all category fields null, key_laws []
+- key_laws: list short names (max ~15 entries); omit URLs and the BWC itself
+- Translation: if the document is not in English, translate all strings; \
 set translated=true\
 """
 
@@ -1166,7 +1503,17 @@ def process_entry_e(
     entry: dict, client, last_t: list[float],
     max_chars: int | None = FORM_E_MAX_CHARS,
 ) -> dict:
-    """Extract Form E (legislation) for one document. Single API call, no chunking."""
+    """Extract Form E (legislation) for one document.
+
+    Three extraction tiers, tried in order:
+      1. pdfplumber geometry — detects strikethrough/underline rects that
+         overlay Yes/No text in the Form E table.  Most reliable for PDFs
+         that use formatting marks invisible in extracted text.
+      2. Claude Vision — renders pages as images; can read bold/circled
+         formatting that pdfplumber cannot detect.
+      3. Text-only — narrative inference from extracted text when no PDF
+         is available or no formatting is detectable.
+    """
     entry_id  = entry["id"]
     form_path = SEGMENTED_DIR / entry_id / "form_e.txt"
     out_path  = STRUCTURED_DIR / f"{entry_id}_form_e.json"
@@ -1178,14 +1525,60 @@ def process_entry_e(
         return {"id": entry_id, "status": "no_form_e"}
 
     text = form_path.read_text(encoding="utf-8")
+    original_len = len(text)
 
-    if max_chars and len(text) > max_chars:
-        text = text[:max_chars]
+    mode = "text"  # default; upgraded if a higher tier succeeds
+    pdf_path = RAW_PDFS_DIR / f"{entry_id}.pdf"
+    page_nums = _form_e_page_numbers(form_path) if pdf_path.exists() else []
+    if len(page_nums) > MAX_VISION_PAGES:
+        log.warning("[%s/E] %d pages exceeds limit, using first %d",
+                    entry_id, len(page_nums), MAX_VISION_PAGES)
+        page_nums = page_nums[:MAX_VISION_PAGES]
 
-    messages = [{"role": "user", "content": text}]
+    # ── Tier 1: pdfplumber formatting detection ──────────────────────
+    if page_nums:
+        try:
+            annotation = _detect_form_e_formatting(pdf_path, page_nums)
+        except Exception as exc:
+            log.warning("[%s/E] pdfplumber detection failed: %s",
+                        entry_id, exc)
+            annotation = None
+
+        if annotation:
+            messages = [{"role": "user", "content": annotation + text}]
+            system = SYSTEM_PROMPT_E
+            mode = "pdfplumber"
+
+    # ── Tier 2: Claude Vision ────────────────────────────────────────
+    if mode == "text" and page_nums:
+        try:
+            image_blocks = _render_pages_as_base64(pdf_path, page_nums)
+            content: list[dict] = image_blocks + [
+                {"type": "text", "text": (
+                    f"State Party: {entry['country']} ({entry['country_iso3']})\n"
+                    f"Year: {entry['year']}\n"
+                    f"Document language: {entry.get('language', 'en')}\n\n"
+                    "Extract the Form E legislation table from the page "
+                    "image(s) above."
+                )},
+            ]
+            messages = [{"role": "user", "content": content}]
+            system = SYSTEM_PROMPT_E_VISION
+            mode = "vision"
+        except Exception as exc:
+            log.warning("[%s/E] Vision rendering failed, falling back to "
+                        "text: %s", entry_id, exc)
+
+    # ── Tier 3: text-only extraction ─────────────────────────────────
+    if mode == "text":
+        if max_chars and original_len > max_chars:
+            text = text[:max_chars]
+        messages = [{"role": "user", "content": text}]
+        system = SYSTEM_PROMPT_E
+
     try:
         data, usage = call_and_parse(client, messages, last_t, entry_id,
-                                     system=SYSTEM_PROMPT_E, form_tag="E")
+                                     system=system, form_tag="E")
     except Exception as exc:
         log.error("[%s/E] API error: %s", entry_id, exc)
         return {"id": entry_id, "status": "error", "error": str(exc)}
@@ -1193,13 +1586,16 @@ def process_entry_e(
         return {"id": entry_id, "status": "error", "calls": 2, **usage}
 
     cats = data.get("categories") or {}
-    log.info("[%s/E] prohibitions=%s exports=%s | in=%d out=%d tokens",
-             entry_id,
+    log.info("[%s/E] (%s) prohibitions=%s exports=%s | in=%d out=%d tokens",
+             entry_id, mode,
              (cats.get("prohibitions") or {}).get("legislation"),
              (cats.get("exports") or {}).get("legislation"),
              usage["input_tokens"], usage["output_tokens"])
 
-    _write_output_e(out_path, entry, data, usage, truncated=(max_chars is not None and len(form_path.read_text(encoding="utf-8")) > (max_chars or 0)))
+    truncated = (mode == "text" and max_chars is not None
+                 and original_len > (max_chars or 0))
+    _write_output_e(out_path, entry, data, usage, truncated=truncated,
+                    extraction_mode=mode)
     return {"id": entry_id, "status": "ok", "calls": 1, **usage}
 
 
@@ -1209,6 +1605,7 @@ def _write_output_e(
     declaration: dict,
     usage: dict,
     truncated: bool = False,
+    extraction_mode: str = "text",
 ) -> None:
     STRUCTURED_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -1221,10 +1618,11 @@ def _write_output_e(
         "input_truncated": truncated,
         **declaration,
         "extraction_metadata": {
-            "source_id":    entry["id"],
-            "country_iso3": entry["country_iso3"],
-            "year":         entry["year"],
-            "language":     entry.get("language", "en"),
+            "source_id":       entry["id"],
+            "country_iso3":    entry["country_iso3"],
+            "year":            entry["year"],
+            "language":        entry.get("language", "en"),
+            "extraction_mode": extraction_mode,
         },
     }
     out_path.write_text(
