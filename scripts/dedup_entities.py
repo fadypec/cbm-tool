@@ -90,7 +90,7 @@ MERGES = [
         None),
 
     # Ireland — typographic variation + appended hospital name (same BSL-3, same agents, no year overlap)
-    ("IRL_002", ["IRL_008", "IRL_023"],
+    ("IRL_002", ["IRL_008", "IRL_023", "IRL_027"],
         "Public Health Laboratory (PHL), Cherry Orchard Hospital"),
 
     # ── Ireland — systematic scan (2026-03-18) ──────────────────────────────
