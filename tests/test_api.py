@@ -346,7 +346,7 @@ class TestBwcMembership:
 # ── /api/country/{iso3}/defence ──────────────────────────────────────────────
 
 class TestCountryDefence:
-    def test_returns_programmes_entities_records(self, client):
+    def test_returns_programmes_and_entities(self, client):
         c, pool = client
         cur = _setup_cursor(pool)
         cur.fetchall.side_effect = [
@@ -364,24 +364,13 @@ class TestCountryDefence:
                 "first_year": 2015, "last_year": 2024,
                 "has_bsl4": False, "has_bsl3": True,
             }],
-            # records
-            [{
-                "year": 2024, "canonical_defence_facility_id": "DEU_D001",
-                "facility_name": "WIS Munster", "city": "Munster",
-                "address": "Humboldtstr. 1", "bsl2_area_m2": 200,
-                "bsl3_area_m2": 50, "bsl4_area_m2": 0,
-                "total_lab_area_m2": 250, "personnel_total": 40,
-                "personnel_military": 10, "personnel_civilian": 30,
-                "mod_funded": True, "work_description": "Bio defence research",
-                "confidence": "high",
-            }],
         ]
         r = c.get("/api/country/DEU/defence")
         assert r.status_code == 200
         body = r.json()
         assert "programmes" in body
         assert "entities" in body
-        assert "records" in body
+        assert "records" not in body
         assert len(body["programmes"]) == 1
         assert body["programmes"][0]["programme_name"] == "Bundeswehr Bio Defence"
         assert body["entities"][0]["canonical_name"] == "WIS Munster"
@@ -389,13 +378,13 @@ class TestCountryDefence:
     def test_empty_defence_data(self, client):
         c, pool = client
         cur = _setup_cursor(pool)
-        cur.fetchall.side_effect = [[], [], []]
+        cur.fetchall.side_effect = [[], []]
         r = c.get("/api/country/LUX/defence")
         assert r.status_code == 200
         body = r.json()
         assert body["programmes"] == []
         assert body["entities"] == []
-        assert body["records"] == []
+        assert "records" not in body
 
 
 # ── /api/country/{iso3}/vaccine ──────────────────────────────────────────────

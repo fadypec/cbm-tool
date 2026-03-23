@@ -1353,37 +1353,55 @@ function renderDefenceEntityModal(data) {
         html += `<div class="mb-3"><small class="text-muted"><strong>Also known as:</strong> ${data.all_names.map(esc).join('; ')}</small></div>`;
     }
 
-    html += (data.year_records || []).map(yr => {
+    const yearGroups = [];
+    for (const yr of (data.year_records || [])) {
+        const last = yearGroups[yearGroups.length - 1];
+        if (last && last.year === yr.year) { last.rows.push(yr); }
+        else { yearGroups.push({ year: yr.year, rows: [yr] }); }
+    }
+
+    function _defenceYrRow(yr, showYear) {
         const bslParts = [];
         if (yr.bsl4_area_m2) bslParts.push(`BSL-4: ${yr.bsl4_area_m2} m²`);
         if (yr.bsl3_area_m2) bslParts.push(`BSL-3: ${yr.bsl3_area_m2} m²`);
         if (yr.bsl2_area_m2) bslParts.push(`BSL-2: ${yr.bsl2_area_m2} m²`);
         const kvs = [
-            ['Facility name',       yr.facility_name],
-            ['City',                yr.city],
-            ['Address',             yr.address],
-            ['Containment',         bslParts.join(', ') || null],
-            ['Personnel (total)',    yr.personnel_total],
-            ['Personnel (mil.)',     yr.personnel_military],
-            ['Personnel (civ.)',     yr.personnel_civilian],
-            ['MoD funded',          yr.mod_funded != null ? (yr.mod_funded ? 'Yes' : 'No') : null],
-            ['Work description',    yr.work_description],
-            ['Funding source',      yr.funding_source],
+            ['Facility name',    yr.facility_name],
+            ['City',             yr.city],
+            ['Address',          yr.address],
+            ['Containment',      bslParts.join(', ') || null],
+            ['Personnel (total)',yr.personnel_total],
+            ['Personnel (mil.)', yr.personnel_military],
+            ['Personnel (civ.)', yr.personnel_civilian],
+            ['MoD funded',       yr.mod_funded != null ? (yr.mod_funded ? 'Yes' : 'No') : null],
+            ['Work description', yr.work_description],
+            ['Funding source',   yr.funding_source],
         ].filter(([, v]) => v != null && v !== '');
+        const head = showYear ? `
+            <div class="yr-head">${yr.year}
+                ${yr.source_url ? `<a href="${esc(yr.source_url)}" target="_blank" rel="noopener noreferrer" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>` : ''}
+                ${yr.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(yr.confidence * 100)}%</small>` : ''}
+                ${yr.geocode_confidence ? `<small class="text-muted fw-normal ms-2">geocode: ${yr.geocode_confidence}</small>` : ''}
+            </div>` : '';
+        return `${head}<dl class="yr-kv">${kvs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join('')}</dl>`;
+    }
 
-        return `
-            <div class="year-record">
-                <div class="yr-head">${yr.year}
-                    ${yr.source_url
-                        ? `<a href="${esc(yr.source_url)}" target="_blank" rel="noopener noreferrer" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>`
-                        : ''}
-                    ${yr.confidence != null ? `<small class="text-muted fw-normal ms-2">confidence ${Math.round(yr.confidence * 100)}%</small>` : ''}
-                    ${yr.geocode_confidence ? `<small class="text-muted fw-normal ms-2">geocode: ${yr.geocode_confidence}</small>` : ''}
-                </div>
-                <dl class="yr-kv">
-                    ${kvs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join('')}
-                </dl>
-            </div>`;
+    html += yearGroups.map(({ year, rows }) => {
+        if (rows.length === 1) {
+            return `<div class="year-record">${_defenceYrRow(rows[0], true)}</div>`;
+        }
+        const srcUrl = rows[0].source_url;
+        return `<div class="year-record">
+            <div class="yr-head">${year}
+                ${srcUrl ? `<a href="${esc(srcUrl)}" target="_blank" rel="noopener noreferrer" class="popup-link" style="font-size:11px;margin-left:8px">source ↗</a>` : ''}
+                <small class="text-muted fw-normal ms-2">${rows.length} sub-facilities</small>
+            </div>
+            ${rows.map((r, i) => `
+                <div style="border-left:2px solid #2d3a55;margin:6px 0 6px 8px;padding-left:10px">
+                    <div style="font-size:0.75rem;color:#8090b0;margin-bottom:2px">Facility ${i + 1}</div>
+                    ${_defenceYrRow(r, false)}
+                </div>`).join('')}
+        </div>`;
     }).join('') || '<div class="text-muted">No year records found.</div>';
 
     document.getElementById('modal-body').innerHTML = html;

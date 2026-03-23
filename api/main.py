@@ -416,19 +416,7 @@ def api_country_defence(iso3: str):
         """, (iso3,))
         entities = [dict(r) for r in cur.fetchall()]
 
-        # All year records (for detail within the entity modal)
-        cur.execute("""
-            SELECT year, canonical_defence_facility_id, facility_name,
-                   city, address, bsl2_area_m2, bsl3_area_m2, bsl4_area_m2,
-                   total_lab_area_m2, personnel_total, personnel_military,
-                   personnel_civilian, mod_funded, work_description, confidence
-            FROM defence_facilities
-            WHERE country_iso3 = %s
-            ORDER BY year DESC, facility_name
-        """, (iso3,))
-        records = [dict(r) for r in cur.fetchall()]
-
-    return _json({"programmes": programmes, "entities": entities, "records": records})
+    return _json({"programmes": programmes, "entities": entities})
 
 
 # ── /api/entity/defence/{id} ──────────────────────────────────────────────────
