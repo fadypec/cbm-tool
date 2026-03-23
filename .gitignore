@@ -27,6 +27,10 @@ env/
 cbm_dump.sql
 *.sql.gz
 
+# Git worktrees
+.worktrees/
+.superpowers/
+
 # Internal working documents (not for public repo)
 nextsteps.md
 ROADMAP.md
