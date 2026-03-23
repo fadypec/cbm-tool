@@ -143,6 +143,17 @@ Choropleth styles are module-level constants (CHORO_STYLE_*) in app.js.
 `claude-sonnet-4-20250514`, MAX_TOKENS=8192, CHUNK_MAX_CHARS=4000,
 RATE_LIMIT_DELAY=10s (≤6 RPM). `parse_json_response` returns `dict | None`.
 
+## Data safety
+
+**Always ask for explicit confirmation before any operation that could overwrite or delete existing data.** This includes:
+- Running `python3 scripts/06_load_database.py` (reloads tables, even though geom is preserved for `facility_years`)
+- Running `python3 scripts/07_geocode.py` after a reload that may have cleared geocoded geometry
+- Running `python3 scripts/dedup_entities.py --apply` (rewrites canonical IDs)
+- Any SQL `DELETE`, `TRUNCATE`, or `UPDATE` that touches more than a handful of rows
+- Any pipeline step that overwrites files in `data/structured/` or `data/output/`
+
+Before proceeding, state what data will be affected and wait for an explicit "yes, go ahead".
+
 ## Gotchas
 
 - **Script 04 is incremental**: skips documents whose output JSON already exists.
