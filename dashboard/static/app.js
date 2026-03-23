@@ -558,8 +558,14 @@ function clearAllFilters() {
     STATE.hideLow = false;
     STATE.showLapsed = false;
     STATE.year = null;
-    STATE.bsl = { 'BSL-4': true, 'BSL-3': true, 'BSL-2': true, 'BSL-1': true, unknown: true };
-    // Sync UI checkboxes for BSL
+    STATE.bsl    = { 'BSL-4': true, 'BSL-3': true, 'BSL-2': true, 'BSL-1': true, unknown: true };
+    STATE.layers = { A1: true, A2: true, G: true };
+    // Sync layer checkboxes
+    ['A1', 'A2', 'G'].forEach(l => {
+        const cb = document.getElementById('layer-' + l);
+        if (cb) cb.checked = true;
+    });
+    // Sync BSL checkboxes
     document.querySelectorAll('input[name="bsl"]').forEach(cb => { cb.checked = true; });
     const allYears = document.getElementById('all-years');
     if (allYears) allYears.checked = true;
@@ -577,8 +583,7 @@ function clearAllFilters() {
     if (lapsedRow) lapsedRow.style.display = 'none';
     const bslWarn = document.getElementById('bsl-warning');
     if (bslWarn) bslWarn.style.display = 'none';
-    updateActiveFilterChips();
-    updateActiveFiltersBar();
+    updateActiveFilterChips(); // updates legacy chip area + calls updateActiveFiltersBar()
     applyFilters();
 }
 
@@ -1698,15 +1703,16 @@ function initSearch() {
         if (e.key === 'Escape') { results.classList.remove('open'); input.setAttribute('aria-expanded', 'false'); input.blur(); }
     });
 
-    // Apply initial AI mode visual state
-    const btn = document.getElementById('search-mode-btn');
-    if (btn) {
-        btn.classList.add('ai-active');
-        btn.title = 'Switch back to facility search';
-    }
-    if (input) {
-        input.placeholder = 'Ask anything, e.g. "BSL-4 labs in Eastern Europe"…';
-        input.classList.add('ai-mode');
+    _syncSearchModeVisuals(document.getElementById('search-mode-btn'), input);
+}
+
+function _syncSearchModeVisuals(btn, input) {
+    if (_searchMode === 'ai') {
+        if (btn) { btn.classList.add('ai-active'); btn.title = 'Switch back to facility search'; }
+        if (input) { input.placeholder = 'Ask anything, e.g. "BSL-4 labs in Eastern Europe"…'; input.classList.add('ai-mode'); }
+    } else {
+        if (btn) { btn.classList.remove('ai-active'); btn.title = 'Switch to AI natural language search'; }
+        if (input) { input.placeholder = 'Search facilities, organisms…'; input.classList.remove('ai-mode'); }
     }
 }
 
@@ -1715,18 +1721,10 @@ function toggleSearchMode() {
     const btn    = document.getElementById('search-mode-btn');
     const input  = document.getElementById('search-input');
     const results = document.getElementById('search-results');
+    _syncSearchModeVisuals(btn, input);
     if (_searchMode === 'ai') {
-        btn.classList.add('ai-active');
-        btn.title = 'Switch back to facility search';
-        input.placeholder = 'Ask anything, e.g. "BSL-4 labs in Eastern Europe"…';
-        input.classList.add('ai-mode');
         results.classList.remove('open');
         input.classList.remove('searching');
-    } else {
-        btn.classList.remove('ai-active');
-        btn.title = 'Switch to AI natural language search';
-        input.placeholder = 'Search facilities, organisms…';
-        input.classList.remove('ai-mode');
     }
     input.focus();
 }
@@ -2612,7 +2610,7 @@ function updateActiveFiltersBar() {
     }
 
     if (chips.length > 0) {
-        chips.push(`<span class="map-chip" data-action="clear-all-filters" style="cursor:pointer;background:#2a1a1a;border-color:#6a2a2a;color:#e07070">✕ Clear all</span>`);
+        chips.push(`<span class="map-chip map-chip--clear-all" data-action="clear-all-filters">✕ Clear all</span>`);
     }
 
     if (chips.length) {
