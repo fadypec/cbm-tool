@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CBM Facility Explorer — REST API
+CBM Lens — REST API
 
 Serves structured data from the CBM PostgreSQL database and the static
 web dashboard.
@@ -161,7 +161,7 @@ def get_client_ip(request: Request) -> str:
 limiter = Limiter(key_func=get_client_ip, default_limits=["60/minute"])
 
 app = FastAPI(
-    title="CBM Facility Explorer",
+    title="CBM Lens",
     version="1.0",
     lifespan=lifespan,
     # Docs only enabled when ENVIRONMENT=dev — reduces attack surface in production
@@ -1255,6 +1255,7 @@ def api_natural_query(request: Request, body: NaturalQueryRequest):
                    f.country_iso3,
                    f.latest_containment,
                    f.years_declared,
+                   'A1'                    AS layer,
                    (SELECT d.country_name FROM documents d
                     WHERE d.country_iso3 = f.country_iso3
                       AND d.country_name IS NOT NULL LIMIT 1) AS country_name
@@ -1264,6 +1265,45 @@ def api_natural_query(request: Request, body: NaturalQueryRequest):
             LIMIT 150
         """, params)
         facilities = [dict(r) for r in cur.fetchall()]
+
+        # For geographic queries (countries filter present), also include vaccine
+        # and defence facilities — they lack organism annotations so can't match
+        # text filters, but should appear in country-scoped results.
+        if countries:
+            cp = ",".join(["%s"] * len(countries))
+            cur.execute(f"""
+                SELECT vf.id::text AS id,
+                       vf.canonical_name AS name,
+                       vf.country_iso3,
+                       NULL::text AS latest_containment,
+                       ARRAY(SELECT generate_series(vf.first_year::int, vf.last_year::int))
+                           AS years_declared,
+                       'G' AS layer,
+                       (SELECT d.country_name FROM documents d
+                        WHERE d.country_iso3 = vf.country_iso3
+                          AND d.country_name IS NOT NULL LIMIT 1) AS country_name
+                FROM vaccine_facilities vf
+                WHERE vf.country_iso3 IN ({cp})
+                ORDER BY vf.country_iso3, vf.canonical_name
+            """, countries)
+            facilities += [dict(r) for r in cur.fetchall()]
+
+            cur.execute(f"""
+                SELECT de.canonical_defence_facility_id AS id,
+                       de.canonical_name AS name,
+                       de.country_iso3,
+                       NULL::text AS latest_containment,
+                       ARRAY(SELECT generate_series(de.first_year::int, de.last_year::int))
+                           AS years_declared,
+                       'A2' AS layer,
+                       (SELECT d.country_name FROM documents d
+                        WHERE d.country_iso3 = de.country_iso3
+                          AND d.country_name IS NOT NULL LIMIT 1) AS country_name
+                FROM defence_entities de
+                WHERE de.country_iso3 IN ({cp})
+                ORDER BY de.country_iso3, de.canonical_name
+            """, countries)
+            facilities += [dict(r) for r in cur.fetchall()]
 
     # Clamp rationale to 300 chars to prevent Claude response smuggling large blobs
     rationale = str(filters.get("rationale", ""))[:300]

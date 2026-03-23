@@ -2523,17 +2523,20 @@ async function runAIQuery() {
                 </div>
              </div>
              <div class="ai-results-list">` +
-            facilities.map(f =>
-                `<div class="ai-result-item">
+            facilities.map(f => {
+                const typeLabel = f.layer === 'A2' ? 'Defence' : f.layer === 'G' ? 'Vaccine' : 'Research';
+                const typeColor = f.layer === 'A2' ? '#8b4a4a' : f.layer === 'G' ? '#27ae60' : '#4a7ab5';
+                return `<div class="ai-result-item">
                     <div class="ai-result-name">${esc(f.name || '[Unnamed]')}</div>
                     <div class="ai-result-meta">
                         ${esc(f.country_name || f.country_iso3)}
+                        &nbsp;·&nbsp; <span style="color:${typeColor}">${typeLabel}</span>
                         ${f.latest_containment
                             ? ` &nbsp;·&nbsp; <span style="color:${bslColor(f.latest_containment)}">${esc(f.latest_containment)}</span>`
                             : ''}
                     </div>
-                 </div>`
-            ).join('') +
+                 </div>`;
+            }).join('') +
             `</div>`;
     } catch (e) {
         const hint = e.message.includes('503') ? ' — ANTHROPIC_API_KEY not configured on this server' : '';
@@ -2570,18 +2573,22 @@ function exportAIResults(facilities) {
         .slice(0, 60);
     const filename = `cbm-ai-${slug}-${today}.csv`;
     const meta = [
-        ['# CBM Facility Explorer — AI Search Export'],
+        ['# CBM Lens — AI Search Export'],
         [`# Query: "${(_aiQuery || '').replace(/"/g, '\\"')}"`],
         [`# Date: ${today}`],
         [`# Results: ${facilities.length} facilit${facilities.length !== 1 ? 'ies' : 'y'}`],
         ['#'],
     ];
-    const header = ['id', 'name', 'country_iso3', 'country_name', 'latest_containment', 'years_declared'];
-    const rows = facilities.map(f => [
-        f.id || '', f.name || '', f.country_iso3 || '', f.country_name || '',
-        f.latest_containment || '',
-        Array.isArray(f.years_declared) ? f.years_declared.join('|') : (f.years_declared || ''),
-    ]);
+    const header = ['id', 'name', 'country_iso3', 'country_name', 'facility_type', 'latest_containment', 'years_declared'];
+    const rows = facilities.map(f => {
+        const typeLabel = f.layer === 'A2' ? 'Defence' : f.layer === 'G' ? 'Vaccine' : 'Research';
+        return [
+            f.id || '', f.name || '', f.country_iso3 || '', f.country_name || '',
+            typeLabel,
+            f.latest_containment || '',
+            Array.isArray(f.years_declared) ? f.years_declared.join('|') : (f.years_declared || ''),
+        ];
+    });
     const csvRows = [
         ...meta.map(r => r[0]),
         header.map(v => `"${v}"`).join(','),
@@ -3021,7 +3028,7 @@ ${data.facilities.map(f => `<tr>
 ${bsl4facs.length ? `<h2>BSL-4 FACILITIES</h2>
 <ul>${bsl4facs.map(f => `<li><strong>${esc(f.canonical_name) || '[Unnamed]'}</strong></li>`).join('')}</ul>` : ''}
 
-<div class="footer">Generated from CBM Facility Explorer &middot; bwc-cbm.un.org &middot; Data as of ${new Date().toISOString().slice(0, 10)}</div>
+<div class="footer">Generated from CBM Lens &middot; bwc-cbm.un.org &middot; Data as of ${new Date().toISOString().slice(0, 10)}</div>
 </body></html>`;
 
     const blob = new Blob([html], {type: 'text/html'});
