@@ -36,7 +36,6 @@ const STATE = {
     bsl:        { 'BSL-4': true, 'BSL-3': true, 'BSL-2': true, 'BSL-1': true, unknown: true },
     year:       null,   // null = all years
     hideLow:    false,
-    organism:   '',     // organism text filter (A1 only)
     aiFilterIds: null,  // Set of canonical_facility_ids from AI query (null = no filter)
     // Lapsed declarations: show facilities that haven't appeared in recent CBMs
     showLapsed:       false,
@@ -60,7 +59,7 @@ let entityModal   = null;
 let choroForm     = 'A1';
 let filterCollapsed = false;
 let searchTimer   = null;
-let _searchMode   = 'normal'; // 'normal' | 'ai'
+let _searchMode   = 'ai'; // 'normal' | 'ai'
 let _countriesData  = [];   // full /api/countries response, for global table
 let _playInterval   = null; // year animation interval
 let _hashTimer      = null; // debounce for history.replaceState
@@ -395,10 +394,6 @@ function matchesFilter(layer, feature) {
     if (STATE.hideLow && p.geocode_conf === 'low') return false;
     if (layer === 'A1') {
         if (!STATE.bsl[normalizeBsl(p.containment)]) return false;
-        if (STATE.organism) {
-            const ag = (p.agents_summary || '').toLowerCase();
-            if (!ag.includes(STATE.organism.toLowerCase())) return false;
-        }
         if (STATE.aiFilterIds && !STATE.aiFilterIds.has(p.id)) return false;
     }
     return true;
@@ -544,36 +539,10 @@ function onFilterChange() {
     updateActiveFiltersBar();
 }
 
-// ── Organism filter ─────────────────────────────────────────────────────────
-
-function onOrganismFilter(val) {
-    STATE.organism = val.trim();
-    updateOrganismClearBtn();
-    applyFilters();
-}
-
-function clearOrganismFilter() {
-    STATE.organism = '';
-    const input = document.getElementById('organism-input');
-    if (input) input.value = '';
-    updateOrganismClearBtn();
-    applyFilters();
-}
-
-function updateOrganismClearBtn() {
-    const btn = document.getElementById('organism-clear');
-    if (btn) btn.style.display = STATE.organism ? 'inline-flex' : 'none';
-}
-
-// Called from the pathogen chart — sets the filter and closes the trends modal.
+// Called from the pathogen chart — redirects to AI search instead of organism filter.
 function applyOrganismFilter(term) {
-    STATE.organism = term;
-    const input = document.getElementById('organism-input');
-    if (input) input.value = term;
-    updateOrganismClearBtn();
-    const trendsEl = document.getElementById('trends-modal');
-    if (trendsEl) bootstrap.Modal.getInstance(trendsEl)?.hide();
-    applyFilters();
+    if (!term) return;
+    showAIQuery('facilities working with ' + term);
 }
 
 // ── AI filter ───────────────────────────────────────────────────────────────
@@ -581,6 +550,35 @@ function applyOrganismFilter(term) {
 function clearAIFilter() {
     STATE.aiFilterIds = null;
     updateActiveFilterChips();
+    applyFilters();
+}
+
+function clearAllFilters() {
+    STATE.aiFilterIds = null;
+    STATE.hideLow = false;
+    STATE.showLapsed = false;
+    STATE.year = null;
+    STATE.bsl = { 'BSL-4': true, 'BSL-3': true, 'BSL-2': true, 'BSL-1': true, unknown: true };
+    // Sync UI checkboxes for BSL
+    document.querySelectorAll('input[name="bsl"]').forEach(cb => { cb.checked = true; });
+    const allYears = document.getElementById('all-years');
+    if (allYears) allYears.checked = true;
+    const yearSlider = document.getElementById('year-slider');
+    if (yearSlider) { yearSlider.setAttribute('disabled', ''); }
+    const yearInput = document.getElementById('year-input');
+    if (yearInput) { yearInput.setAttribute('disabled', ''); }
+    const playBtn = document.getElementById('year-play');
+    if (playBtn) { playBtn.setAttribute('disabled', ''); stopYearPlay(); }
+    const hideLowCb = document.getElementById('hide-low');
+    if (hideLowCb) hideLowCb.checked = false;
+    const lapsedToggle = document.getElementById('lapsed-toggle');
+    if (lapsedToggle) lapsedToggle.checked = false;
+    const lapsedRow = document.getElementById('lapsed-threshold-row');
+    if (lapsedRow) lapsedRow.style.display = 'none';
+    const bslWarn = document.getElementById('bsl-warning');
+    if (bslWarn) bslWarn.style.display = 'none';
+    updateActiveFilterChips();
+    updateActiveFiltersBar();
     applyFilters();
 }
 
@@ -756,9 +754,6 @@ function exportCSV() {
     const activeLayers = [];
     for (const layer of ['A1', 'A2', 'G']) {
         if (!STATE.layers[layer] || !DATA[layer]) continue;
-        // Organism filter is A1-only (A2/G have no agents_summary); skip other layers
-        // when organism is active so the export matches exactly what the map shows
-        if (STATE.organism && layer !== 'A1') continue;
         activeLayers.push(layer);
         DATA[layer].features
             .filter(f => matchesFilter(layer, f))
@@ -782,10 +777,9 @@ function exportCSV() {
     // FEATURE 3: filename encodes active layers (e.g. cbm-A1-G-2023.csv)
     const layerStr = activeLayers.join('-');
     const yearStr  = STATE.year ? '-' + STATE.year : '';
-    const orgStr   = STATE.organism ? '-' + STATE.organism.toLowerCase().replace(/\s+/g, '_') : '';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = `cbm-${layerStr}${yearStr}${orgStr}.csv`;
+    a.download = `cbm-${layerStr}${yearStr}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
 }
@@ -1703,6 +1697,17 @@ function initSearch() {
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape') { results.classList.remove('open'); input.setAttribute('aria-expanded', 'false'); input.blur(); }
     });
+
+    // Apply initial AI mode visual state
+    const btn = document.getElementById('search-mode-btn');
+    if (btn) {
+        btn.classList.add('ai-active');
+        btn.title = 'Switch back to facility search';
+    }
+    if (input) {
+        input.placeholder = 'Ask anything, e.g. "BSL-4 labs in Eastern Europe"…';
+        input.classList.add('ai-mode');
+    }
 }
 
 function toggleSearchMode() {
@@ -2436,6 +2441,7 @@ function renderFacilityChangesTab(yearRecords) {
 // ── AI Query ───────────────────────────────────────────────────────────────
 
 let _aiResults = null;  // last AI query result set, for export / show-on-map
+let _aiQuery   = '';    // last AI query string, for export filename / header
 
 function showAIQuery(initialQuery = '') {
     const modalEl = document.getElementById('ai-query-modal');
@@ -2461,6 +2467,7 @@ async function runAIQuery() {
     const btn        = document.getElementById('ai-query-submit');
     const q = input?.value?.trim();
     if (!q || q.length < 3) return;
+    _aiQuery = q;
 
     resultsEl.innerHTML = '<div class="text-center py-3 text-muted">Querying AI…</div>';
     rationaleEl.style.display = 'none';
@@ -2523,25 +2530,51 @@ async function runAIQuery() {
 function applyAIFilter(facilities) {
     if (!facilities || !facilities.length) return;
     STATE.aiFilterIds = new Set(facilities.map(f => f.id).filter(Boolean));
-    bootstrap.Modal.getInstance(document.getElementById('ai-query-modal'))?.hide();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal'))?.hide();
     updateActiveFilterChips();
     applyFilters();
+    // Zoom map to show filtered results
+    setTimeout(() => {
+        if (CLUSTERS.A1 && CLUSTERS.A1.getLayers().length > 0) {
+            try {
+                const bounds = CLUSTERS.A1.getBounds();
+                if (bounds.isValid()) map.fitBounds(bounds.pad(0.15));
+            } catch (_) {}
+        }
+    }, 350); // wait for modal fade-out to complete
 }
 
 function exportAIResults(facilities) {
     if (!facilities || !facilities.length) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const slug = (_aiQuery || 'results')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60);
+    const filename = `cbm-ai-${slug}-${today}.csv`;
+    const meta = [
+        ['# CBM Facility Explorer — AI Search Export'],
+        [`# Query: "${(_aiQuery || '').replace(/"/g, '\\"')}"`],
+        [`# Date: ${today}`],
+        [`# Results: ${facilities.length} facilit${facilities.length !== 1 ? 'ies' : 'y'}`],
+        ['#'],
+    ];
     const header = ['id', 'name', 'country_iso3', 'country_name', 'latest_containment', 'years_declared'];
-    const rows = [header, ...facilities.map(f => [
+    const rows = facilities.map(f => [
         f.id || '', f.name || '', f.country_iso3 || '', f.country_name || '',
         f.latest_containment || '',
-        (f.years_declared || []).join('|'),
-    ])];
-    const csv = rows.map(r =>
-        r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
-    ).join('\n');
+        Array.isArray(f.years_declared) ? f.years_declared.join('|') : (f.years_declared || ''),
+    ]);
+    const csvRows = [
+        ...meta.map(r => r[0]),
+        header.map(v => `"${v}"`).join(','),
+        ...rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')),
+    ];
+    const csv = csvRows.join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = 'cbm-ai-results.csv';
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(a.href);
 }
@@ -2555,10 +2588,6 @@ function updateActiveFiltersBar() {
 
     const chips = [];
 
-    if (STATE.organism) {
-        chips.push(`<span class="map-chip">🔬 ${esc(STATE.organism)}
-            <button class="map-chip-clear" data-action="clear-organism" title="Clear">×</button></span>`);
-    }
     if (STATE.aiFilterIds) {
         const n = STATE.aiFilterIds.size;
         chips.push(`<span class="map-chip">🤖 AI: ${n} facilit${n !== 1 ? 'ies' : 'y'}
@@ -2580,6 +2609,10 @@ function updateActiveFiltersBar() {
     if (STATE.hideLow) {
         chips.push(`<span class="map-chip">📍 High/med geocode only
             <button class="map-chip-clear" data-action="clear-hide-low-chip" title="Clear">×</button></span>`);
+    }
+
+    if (chips.length > 0) {
+        chips.push(`<span class="map-chip" data-action="clear-all-filters" style="cursor:pointer;background:#2a1a1a;border-color:#6a2a2a;color:#e07070">✕ Clear all</span>`);
     }
 
     if (chips.length) {
@@ -3125,9 +3158,6 @@ function initStaticListeners() {
     document.querySelectorAll('input[name="bsl"]').forEach(cb =>
         cb.addEventListener('change', onFilterChange)
     );
-    // Organism filter
-    const orgInput = document.getElementById('organism-input');
-    if (orgInput) orgInput.addEventListener('input', () => onOrganismFilter(orgInput.value));
     // All-years checkbox
     const allYears = document.getElementById('all-years');
     if (allYears) allYears.addEventListener('change', onAllYearsToggle);
@@ -3222,9 +3252,6 @@ function initEventDelegation() {
             // ── Search / AI ──
             case 'toggle-search-mode':
                 toggleSearchMode();
-                break;
-            case 'clear-organism':
-                clearOrganismFilter();
                 break;
             case 'run-ai-query':
                 runAIQuery();
@@ -3325,6 +3352,9 @@ function initEventDelegation() {
                 onFilterChange();
                 break;
             }
+            case 'clear-all-filters':
+                clearAllFilters();
+                break;
         }
     });
 }
