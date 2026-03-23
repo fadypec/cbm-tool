@@ -173,22 +173,45 @@ def _detect_form_e_formatting(
     pdf_path: Path,
     page_nums: list[int],
 ) -> str | None:
-    """Detect strikethrough/underline on Form E Yes/No values via pdfplumber.
+    """Detect strikethrough/underline/color on Form E Yes/No values via pdfplumber.
 
     The Form E table has 4 rows × 4 columns of Yes/No cells.  Many countries
-    use strikethrough to reject an option (thin ~0.5pt rects drawn over text)
-    or underline to select one.  These formatting marks are invisible in
-    extracted text but detectable as PDF rectangle objects via pdfplumber.
+    use strikethrough to reject an option (thin ~0.5pt rects drawn over text),
+    underline to select one, or accent color (e.g. red font) to highlight the
+    selected option.  These formatting marks are invisible in extracted text but
+    detectable as PDF geometry/color objects via pdfplumber.
 
     Handles two word formats:
       - Combined "Yes/No" tokens: rect position (left vs right half of word)
-        determines which option is struck through.
+        determines which option is struck through; char color on left half = Yes.
       - Separate "Yes" and "No" words: direct rect-to-word overlap matching.
 
     Returns a formatted annotation string for prepending to the extracted
     text, or None if no relevant formatting marks are found.
     """
     import pdfplumber
+
+    def _is_accent_color(color) -> bool:
+        """Return True if color is a clear accent (e.g. red), not black or scan-gray.
+
+        Scanned documents render black ink as dark gray (non_stroking_color ~0.13–0.25
+        in grayscale).  We only want to flag intentional color marks such as red font,
+        so grayscale values must exceed 0.5 (clearly mid-gray or lighter) to count.
+        RGB/CMYK values are checked for non-blackness at the standard threshold.
+        """
+        if color is None:
+            return False
+        if isinstance(color, (int, float)):        # grayscale scalar
+            return float(color) > 0.5             # exclude scan-dark gray (< 0.5)
+        if isinstance(color, (list, tuple)):
+            if len(color) == 1:                    # grayscale 1-tuple
+                return float(color[0]) > 0.5
+            if len(color) == 3:                    # RGB
+                r, g, b = color
+                return not (r < 0.1 and g < 0.1 and b < 0.1)  # not black
+            if len(color) == 4:                    # CMYK
+                return color[3] < 0.9              # not full-key (black)
+        return False
 
     # Geometry thresholds (PDF points)
     RECT_MAX_HEIGHT = 2.0     # strikethrough/underline rects are ~0.5pt tall
@@ -205,9 +228,12 @@ def _detect_form_e_formatting(
                 continue
             page = pdf.pages[pn - 1]
             words = page.extract_words() or []
-            rects = page.rects or []
+            rects = (page.rects or []) + (page.lines or [])
+            chars = page.chars or []
 
-            # Thin horizontal rects = strikethrough or underline candidates
+            # Thin horizontal rects/lines = strikethrough or underline candidates.
+            # Lines have height=0 so always pass the height check; rects are filtered
+            # to those thin enough to be decoration marks (not table borders).
             thin_rects = [
                 r for r in rects
                 if abs(r["bottom"] - r["top"]) < RECT_MAX_HEIGHT
@@ -217,12 +243,16 @@ def _detect_form_e_formatting(
                 continue
 
             # Detect word format: combined "Yes/No" vs separate "Yes" + "No"
+            # Include Cyrillic Да/Нет for Russian/Ukrainian submissions.
             combined = [w for w in words
-                        if w["text"].strip().lower() in ("yes/no", "oui/non")]
+                        if w["text"].strip().lower() in ("yes/no", "oui/non")
+                        or w["text"].strip() in ("Да/Нет", "да/нет")]
             separate_yes = [w for w in words
-                           if w["text"].strip().lower() in ("yes", "oui")]
+                           if w["text"].strip().lower() in ("yes", "oui")
+                           or w["text"].strip() in ("Да", "да")]
             separate_no = [w for w in words
-                          if w["text"].strip().lower() in ("no", "non")]
+                          if w["text"].strip().lower() in ("no", "non")
+                          or w["text"].strip() in ("Нет", "нет")]
 
             if combined:
                 # Combined "Yes/No" — each word is one cell.
@@ -254,6 +284,21 @@ def _detect_form_e_formatting(
                             value = "Yes" if r_mid_x < w_mid_x else "No"
                             break
 
+                    # Fallback: accent color (e.g. red font) on one half.
+                    # Left-half "Yes" chars colored → Yes selected;
+                    # Right-half "No" chars colored → No selected.
+                    if value == "unknown":
+                        for c in chars:
+                            if (c["x1"] < w["x0"] or c["x0"] > w["x1"]
+                                    or c["bottom"] < w["top"]
+                                    or c["top"] > w["bottom"]):
+                                continue
+                            if not _is_accent_color(c.get("non_stroking_color")):
+                                continue
+                            c_mid_x = (c["x0"] + c["x1"]) / 2
+                            value = "Yes" if c_mid_x < w_mid_x else "No"
+                            break
+
                     cells.append({
                         "top": w["top"], "x0": w["x0"],
                         "value": value, "page": pn,
@@ -277,6 +322,17 @@ def _detect_form_e_formatting(
                         if abs(r_mid_y - w["bottom"]) < VERT_TOLERANCE:
                             formatting = "underline"
                             break
+
+                    # Fallback: accent color (e.g. red font) = selected option
+                    if formatting is None:
+                        for c in chars:
+                            if (c["x1"] < w["x0"] or c["x0"] > w["x1"]
+                                    or c["bottom"] < w["top"]
+                                    or c["top"] > w["bottom"]):
+                                continue
+                            if _is_accent_color(c.get("non_stroking_color")):
+                                formatting = "colored"
+                                break
 
                     word_info.append({
                         "text": w["text"].strip().lower(),
@@ -312,6 +368,10 @@ def _detect_form_e_formatting(
                             elif yes_w["formatting"] == "underline":
                                 value = "Yes"
                             elif no_w["formatting"] == "underline":
+                                value = "No"
+                            elif yes_w["formatting"] == "colored":
+                                value = "Yes"
+                            elif no_w["formatting"] == "colored":
                                 value = "No"
                             else:
                                 value = "unknown"

@@ -158,6 +158,7 @@ FORM_ANCHORS: list[tuple[str, re.Pattern]] = [
     ("E", re.compile(rf"^MESURE\s+DE\s+CONFIANCE\s*{_Q}?\s*E\s*{_Q}?\b", re.I)),
     ("E", re.compile(rf"^Medida\s+de\s+fomento\s+de\s+la\s+confianza\s*{_Q}?\s*E\s*{_Q}?\b", re.I)),
     ("E", re.compile(r"^Formulaire\s+E\b", re.I)),
+    ("E", re.compile(r"^Formule\s*E\b", re.I)),  # French compact: "Formule E" or "FormuleE"
     ("E", re.compile(r"^Declaration\s+of\s+legislation[,\s]", re.I)),
 
     # ── Form F — Past offensive/defensive programmes ─────────────────────────
@@ -296,6 +297,27 @@ def classify_page(page_text: str) -> str | None:
 # ── Regex segmentation ────────────────────────────────────────────────────────
 
 
+def _find_mid_page_anchor(page_text: str) -> tuple[str, int] | None:
+    """Find the first form anchor that appears beyond the first 5 non-empty lines.
+
+    Used for compact French documents where multiple form headers appear on a
+    single page (e.g. 'FormuleE' at the bottom of a page that starts mid-Form C).
+    Only checks single-line FORM_ANCHORS to avoid false positives.
+
+    Returns (form_key, raw_line_index_in_page_text) or None.
+    """
+    all_lines = page_text.split("\n")
+    non_empty_idxs = [i for i, l in enumerate(all_lines) if l.strip()]
+    for rank, idx in enumerate(non_empty_idxs):
+        if rank < 5:
+            continue  # already covered by classify_page
+        line = all_lines[idx].strip()
+        for form_key, pattern in FORM_ANCHORS:
+            if pattern.match(line):
+                return form_key, idx
+    return None
+
+
 def segment_regex(
     pages: list[tuple[int, str]],
 ) -> tuple[dict[str, str], str, str]:
@@ -314,9 +336,22 @@ def segment_regex(
         form_key = classify_page(page_text)
         if form_key is not None:
             current_form = form_key
-        if current_form is not None:
             section_pages.setdefault(current_form, [])
             section_pages[current_form].append(f"--- PAGE {page_num} ---\n{page_text}")
+        else:
+            mid = _find_mid_page_anchor(page_text)
+            if mid is not None:
+                mid_form_key, split_idx = mid
+                all_lines = page_text.split("\n")
+                pre_text = "\n".join(all_lines[:split_idx])
+                post_text = "\n".join(all_lines[split_idx:])
+                if current_form is not None and pre_text.strip():
+                    section_pages[current_form].append(f"--- PAGE {page_num} ---\n{pre_text}")
+                current_form = mid_form_key
+                section_pages.setdefault(current_form, [])
+                section_pages[current_form].append(f"--- PAGE {page_num} ---\n{post_text}")
+            elif current_form is not None:
+                section_pages[current_form].append(f"--- PAGE {page_num} ---\n{page_text}")
 
     sections = {k: "".join(v) for k, v in section_pages.items()}
 
