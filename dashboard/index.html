@@ -28,16 +28,16 @@
     <span id="app-title">CBM Lens</span>
     <span id="stats-bar"></span>
     <div id="search-wrap">
-        <input id="search-input" type="text" placeholder="Search facilities, organisms…" autocomplete="off"
-               aria-label="Search facilities and organisms" role="combobox" aria-expanded="false" aria-controls="search-results">
-        <button id="search-mode-btn" data-action="toggle-search-mode" title="Switch to AI natural language search" aria-label="Toggle AI search mode">🤖</button>
+        <input id="search-input" type="text" placeholder="Ask anything, e.g. 'BSL-4 labs in Europe'" autocomplete="off"
+               aria-label="Search facilities and organisms" role="combobox" aria-expanded="false" aria-controls="search-results"
+               class="ai-mode">
         <ul id="search-results" role="listbox"></ul>
     </div>
     <!-- Review queue button: badge shows count of flagged records; hidden when zero -->
     <button id="navbar-review" data-action="show-review-queue" title="View all facilities flagged for review" style="display:none">
         🚩 Review Queue <span id="review-badge" class="review-badge">0</span>
     </button>
-    <button id="theme-toggle" data-action="toggle-theme" aria-label="Switch to light mode" aria-pressed="false" title="Switch to light mode">☀</button>
+    <button id="navbar-trends" data-action="show-trends">📈 Trends</button>
     <button id="navbar-about" data-bs-toggle="modal" data-bs-target="#about-modal">About</button>
 </nav>
 
@@ -328,6 +328,13 @@
                 <p class="text-muted small">Data extracted and processed as part of academic research on BWC transparency.
                 Not an official UN or ISU product. All source documents are publicly available
                 at <a href="https://bwc-cbm.un.org" target="_blank" rel="noopener noreferrer">bwc-cbm.un.org</a>.</p>
+            </div>
+            <div class="modal-footer about-theme-footer">
+                <span class="about-theme-label">Theme</span>
+                <div role="radiogroup" aria-label="Theme" class="theme-seg">
+                    <button id="theme-btn-dark" role="radio" aria-checked="true" class="theme-seg-btn">🌙 Dark</button>
+                    <button id="theme-btn-light" role="radio" aria-checked="false" class="theme-seg-btn">☀ Light</button>
+                </div>
             </div>
         </div>
     </div>
