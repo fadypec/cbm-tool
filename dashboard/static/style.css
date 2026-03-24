@@ -1381,8 +1381,8 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     /* Map: full width, full remaining height */
     #map { flex: 1; width: 100%; }
 
-    /* Filter panel: anchor to right side so sidebar (left overlay) never covers it */
-    #filter-panel { left: auto; right: 10px; width: calc(100vw - 20px); max-width: 280px; }
+    /* Filter panel: below the sidebar-tab button, left-aligned with it */
+    #filter-panel { top: 108px; left: 10px; right: auto; width: calc(100vw - 20px); max-width: 260px; }
 
     /* Sidebar header: indent content past the fixed sidebar-tab button */
     .side-header { padding-left: 50px; }
