@@ -58,7 +58,6 @@ let entityModal   = null;
 // FEATURE 4: which form the choropleth is currently showing
 let choroForm     = 'A1';
 let filterCollapsed = false;
-let searchTimer   = null;
 const _searchMode = 'ai';
 let _countriesData  = [];   // full /api/countries response, for global table
 let _playInterval   = null; // year animation interval
@@ -1697,9 +1696,6 @@ function initSearch() {
             e.preventDefault();
             active?.classList.remove('sr-active');
             (items[idx - 1] || items[items.length - 1])?.classList.add('sr-active');
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            (active || items[0])?.click();
         }
     });
 
@@ -1728,49 +1724,6 @@ function highlightTerm(text, term) {
     if (!term || !text) return esc(text || '');
     const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
     return esc(text).replace(re, m => `<mark class="sr-hl">${m}</mark>`);
-}
-
-async function doSearch(q) {
-    const input   = document.getElementById('search-input');
-    const results = document.getElementById('search-results');
-    try {
-        const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
-        input.classList.remove('searching');
-        results.innerHTML = data.length === 0
-            ? '<li style="color:#8899c8;font-size:12px;padding:10px 14px">No results found</li>'
-            : data.map((f, i) => {
-                const layerColor = _LAYER_COLOR[f.layer] || '#4a8ad4';
-                const layerLabel = _LAYER_LABEL[f.layer] || f.layer;
-                const isActivity = f.match_type === 'activity';
-                const actionAttrs = f.id
-                    ? `data-action="select-search-result" data-entity-id="${esc(f.id)}" data-iso3="${esc(f.country_iso3)}" data-layer="${esc(f.layer)}"`
-                    : `data-action="select-country" data-iso3="${esc(f.country_iso3)}"`;
-
-                // For activity matches show a short snippet of the matched text
-                let snippetHtml = '';
-                if (isActivity && f.activity_snippet) {
-                    const snippet = f.activity_snippet.length > 120
-                        ? f.activity_snippet.slice(0, 120) + '…'
-                        : f.activity_snippet;
-                    snippetHtml = `<div class="sr-snippet">${highlightTerm(snippet, q)}</div>`;
-                }
-
-                const tagHtml = isActivity
-                    ? `<span class="sr-tag sr-tag-activity">activity</span>`
-                    : `<span class="sr-tag" style="color:${layerColor}">${layerLabel}</span>`;
-
-                return `<li data-idx="${i}" ${actionAttrs}>
-                    <div>${highlightTerm(f.name || '[Unnamed]', q)} ${tagHtml}</div>
-                    <div class="sr-meta">${esc(f.country_name || f.country_iso3)}</div>
-                    ${snippetHtml}
-                </li>`;
-              }).join('');
-        results.classList.add('open');
-        input.setAttribute('aria-expanded', 'true');
-    } catch (e) {
-        input.classList.remove('searching');
-        console.error('Search error:', e);
-    }
 }
 
 async function selectSearchResult(entityId, iso3, layer) {
