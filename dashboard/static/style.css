@@ -1030,7 +1030,7 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     background: rgba(0,0,0,0.5);
     z-index: 1999;
 }
-#mobile-overlay.show { display: block; }
+@media (max-width: 767px) { #mobile-overlay.show { display: block; } }
 
 /* ── Dark theme for filter panel ────────────────────────────────────────── */
 /* Overrides the default white panel to match the dark navbar/sidebar */
