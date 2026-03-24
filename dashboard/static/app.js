@@ -2834,6 +2834,59 @@ function renderBsl4CapacityChart(rows, container) {
     container.innerHTML =
         `<p class="capacity-chart-header">Total declared BSL-4 laboratory area (m²) per country per year. Only includes submissions reporting a positive BSL-4 area figure.</p>` +
         svg + legend;
+
+    setupBsl4CapacityChartHover({ years, series, pad, innerW, minYear, maxYear, yearRange }, container);
+}
+
+function setupBsl4CapacityChartHover({ years, series, pad, innerW, minYear, maxYear, yearRange }, container) {
+    const svg = container.querySelector('svg.trends-chart');
+    if (!svg || !years.length) return;
+
+    const W = 580;
+    let tip = document.getElementById('capacity-tooltip');
+    if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'capacity-tooltip';
+        tip.className = 'trends-tooltip';
+        document.body.appendChild(tip);
+    }
+
+    svg.addEventListener('mousemove', e => {
+        const rect  = svg.getBoundingClientRect();
+        const scale = rect.width / W;
+        const relX  = (e.clientX - rect.left) / scale;
+
+        const rawYear = minYear + ((relX - pad.left) / innerW) * yearRange;
+        let nearestIdx = -1, nearestDist = Infinity;
+        years.forEach((y, i) => {
+            const dist = Math.abs(y - Math.round(rawYear));
+            if (dist < nearestDist) { nearestDist = dist; nearestIdx = i; }
+        });
+
+        if (nearestIdx === -1 || nearestDist > 2 || relX < pad.left || relX > pad.left + innerW) {
+            tip.style.display = 'none';
+            return;
+        }
+
+        const yr = years[nearestIdx];
+        const lines = series
+            .map(s => {
+                const v = s.values[nearestIdx];
+                if (!v) return null;
+                const label = v >= 1000 ? `${(v / 1000).toFixed(1)}k m²` : `${v} m²`;
+                return `<span style="color:${s.color}">■</span> ${esc(s.label)}: <strong>${label}</strong>`;
+            })
+            .filter(Boolean)
+            .join('<br>');
+
+        if (!lines) { tip.style.display = 'none'; return; }
+        tip.innerHTML = `<strong>${yr}</strong><br>${lines}`;
+        tip.style.display = 'block';
+        tip.style.left = (e.clientX + 14) + 'px';
+        tip.style.top  = (e.clientY - 14) + 'px';
+    });
+
+    svg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
 }
 
 // ── Country comparison ────────────────────────────────────────────────────────
