@@ -107,6 +107,21 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 }
 #navbar-about:hover { color: #c0ccf0; border-color: #4a4a6a; }
 
+/* ── Navbar Trends button ───────────────────────────────────────────────── */
+#navbar-trends {
+    flex-shrink: 0;
+    background: #1e3a5f;
+    border: 1px solid #2a5a8f;
+    border-radius: 5px;
+    color: #4a9de8;
+    padding: 4px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+#navbar-trends:hover { background: #254878; border-color: #4a8ad4; color: #7ab8f5; }
+
 /* ── Search ─────────────────────────────────────────────────────────────── */
 #search-wrap {
     position: relative;
@@ -137,24 +152,6 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 }
 #search-input.ai-mode::placeholder { color: #7060a0; }
 
-#search-mode-btn {
-    flex-shrink: 0;
-    background: none;
-    border: 1px solid #3a3a5a;
-    border-radius: 5px;
-    color: #8899c8;
-    font-size: 14px;
-    padding: 4px 7px;
-    cursor: pointer;
-    line-height: 1;
-    transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-#search-mode-btn:hover { color: #c0a0f0; border-color: #6040a0; }
-#search-mode-btn.ai-active {
-    background: #221840;
-    border-color: #8060c0;
-    color: #c0a0f0;
-}
 
 #search-input::placeholder { color: #8090b8; }
 #search-input:focus { border-color: #4a8ad4; }
@@ -700,6 +697,53 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 }
 .about-byline a { color: #2471a3; text-decoration: none; font-weight: 500; }
 .about-byline a:hover { text-decoration: underline; }
+
+/* ── About modal theme segmented control ───────────────────────────────── */
+.about-theme-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-top: 1px solid #252535;
+    background: #0e1020;
+}
+.about-theme-label {
+    font-size: 12px;
+    color: #8090b8;
+    font-weight: 600;
+}
+.theme-seg {
+    display: flex;
+    gap: 4px;
+}
+.theme-seg-btn {
+    background: none;
+    border: 1px solid #2a2a3a;
+    border-radius: 4px;
+    color: #8090b8;
+    font-size: 12px;
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.theme-seg-btn[aria-checked="true"] {
+    background: #1e3a5f;
+    border-color: #2a5a8f;
+    color: #4a9de8;
+}
+.theme-seg-btn:hover { border-color: #4a4a6a; color: #c0ccf0; }
+
+[data-theme="light"] .about-theme-footer {
+    background: #f0f2f8;
+    border-top-color: #d0d8ee;
+}
+[data-theme="light"] .about-theme-label { color: #6070a0; }
+[data-theme="light"] .theme-seg-btn { border-color: #c8d2ee; color: #6070a0; }
+[data-theme="light"] .theme-seg-btn[aria-checked="true"] {
+    background: #ddeeff;
+    border-color: #5590cc;
+    color: #1a5a9a;
+}
 
 /* ── Legend collapsible header ──────────────────────────────────────────── */
 .leg-header {
@@ -1446,6 +1490,7 @@ button:focus-visible,
 #sidebar-tab:focus-visible,
 #back-btn:focus-visible,
 #fp-collapse:focus-visible,
+#navbar-trends:focus-visible,
 #navbar-about:focus-visible,
 #navbar-review:focus-visible,
 select:focus-visible {
@@ -1474,24 +1519,6 @@ select:focus-visible {
     .pathogen-bar { transition: none; }
 }
 
-/* ══════════════════════════════════════════════════════════════════════════ */
-/* ── Theme toggle button (lives in navbar — always dark-styled) ─────────── */
-/* ══════════════════════════════════════════════════════════════════════════ */
-
-#theme-toggle {
-    flex-shrink: 0;
-    background: none;
-    border: 1px solid #2a2a3a;
-    border-radius: 5px;
-    color: #8899c8;
-    font-size: 14px;
-    padding: 4px 8px;
-    cursor: pointer;
-    line-height: 1;
-    transition: color 0.15s, border-color 0.15s;
-}
-#theme-toggle:hover { color: #c0ccf0; border-color: #4a4a6a; }
-#theme-toggle:focus-visible { outline: 2px solid #4a8ad4; outline-offset: 2px; }
 
 /* ── Lapsed threshold input + label (extracted from inline styles) ───────── */
 
@@ -1791,6 +1818,14 @@ select:focus-visible {
 [data-theme="light"] .about-byline         { color: #555 !important; border-bottom-color: #e8eaf0 !important; }
 [data-theme="light"] .about-byline a       { color: #2471a3 !important; }
 [data-theme="light"] .about-heading        { color: #1a1e40 !important; border-bottom-color: #e0e4ef !important; }
+
+/* ── Navbar Trends button (light theme) ─────────────────────────────────── */
+[data-theme="light"] #navbar-trends {
+    background: #ddeeff;
+    border-color: #5590cc;
+    color: #1a5a9a;
+}
+[data-theme="light"] #navbar-trends:hover { background: #c8e0f8; border-color: #2470b0; color: #0a4a8a; }
 
 /* ── Global compliance table ──────────────────────────────────────────────── */
 [data-theme="light"] .gt-table thead tr    { background: #f5f6fa !important; border-bottom-color: #dde2f0 !important; }
