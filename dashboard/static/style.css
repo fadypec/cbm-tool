@@ -1381,8 +1381,36 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     /* Map: full width, full remaining height */
     #map { flex: 1; width: 100%; }
 
-    /* Filter panel: below the sidebar-tab button, left-aligned with it */
-    #filter-panel { top: 108px; left: 10px; right: auto; width: calc(100vw - 20px); max-width: 260px; }
+    /* Filter panel: bottom sheet — fixed at screen bottom, expands upward */
+    #filter-panel {
+        position: fixed !important;
+        top: auto !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        width: 100% !important;
+        max-width: none !important;
+        max-height: 75vh !important;
+        border-radius: 16px 16px 0 0 !important;
+        border-left: none !important;
+        border-right: none !important;
+        border-bottom: none !important;
+        box-shadow: 0 -4px 16px rgba(0,0,0,0.4) !important;
+        display: flex !important;
+        flex-direction: column-reverse;
+        overflow: hidden !important;
+    }
+    /* Header at bottom of sheet, body scrolls above it */
+    #filter-panel #fp-header {
+        border-radius: 0 !important;
+        position: static !important;
+        flex-shrink: 0;
+    }
+    #filter-panel #fp-body {
+        overflow-y: auto;
+        flex: 1;
+        min-height: 0;
+    }
 
     /* Sidebar header: indent content past the fixed sidebar-tab button */
     .side-header { padding-left: 50px; }
