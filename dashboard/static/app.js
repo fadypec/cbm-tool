@@ -59,7 +59,7 @@ let entityModal   = null;
 let choroForm     = 'A1';
 let filterCollapsed = false;
 let searchTimer   = null;
-let _searchMode   = 'ai'; // 'normal' | 'ai'
+const _searchMode = 'ai';
 let _countriesData  = [];   // full /api/countries response, for global table
 let _playInterval   = null; // year animation interval
 let _hashTimer      = null; // debounce for history.replaceState
@@ -83,6 +83,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     initStaticListeners();
     initEventDelegation();
     restoreFromHash();
+
+    // Theme segmented control in About modal
+    const themeDark  = document.getElementById('theme-btn-dark');
+    const themeLight = document.getElementById('theme-btn-light');
+    if (themeDark && themeLight) {
+        themeDark.addEventListener('click', () => {
+            applyTheme('dark');
+            themeDark.setAttribute('aria-checked', 'true');
+            themeLight.setAttribute('aria-checked', 'false');
+        });
+        themeLight.addEventListener('click', () => {
+            applyTheme('light');
+            themeLight.setAttribute('aria-checked', 'true');
+            themeDark.setAttribute('aria-checked', 'false');
+        });
+        document.getElementById('about-modal').addEventListener('show.bs.modal', () => {
+            const current = document.documentElement.dataset.theme || 'dark';
+            themeDark.setAttribute('aria-checked', String(current === 'dark'));
+            themeLight.setAttribute('aria-checked', String(current === 'light'));
+        });
+    }
 
     try {
         const [stats, countries, a1, a2, vaccines, compliance, transparency, membershipResp] = await Promise.all([
@@ -201,26 +222,12 @@ function initTheme() {
         if (saved === 'light' || saved === 'dark') theme = saved;
     } catch (_) {}
     document.documentElement.dataset.theme = theme;
-    _syncThemeBtn(theme);
 }
 
-function _syncThemeBtn(theme) {
-    const btn = document.getElementById('theme-toggle');
-    if (!btn) return;
-    const isLight = theme === 'light';
-    btn.textContent = isLight ? '☾' : '☀';
-    btn.title       = isLight ? 'Switch to dark mode'  : 'Switch to light mode';
-    btn.setAttribute('aria-label',   isLight ? 'Switch to dark mode'  : 'Switch to light mode');
-    btn.setAttribute('aria-pressed', String(isLight));
-}
-
-function toggleTheme() {
-    const current = document.documentElement.dataset.theme || 'dark';
-    const next    = current === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = next;
-    try { localStorage.setItem('cbm-theme', next); } catch (_) {}
-    _syncThemeBtn(next);
-    _swapTile(next);
+function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem('cbm-theme', theme); } catch (_) {}
+    _swapTile(theme);
 }
 
 function _swapTile(theme) {
@@ -1666,27 +1673,15 @@ function initSearch() {
     const input   = document.getElementById('search-input');
     const results = document.getElementById('search-results');
 
-    input.addEventListener('input', () => {
-        if (_searchMode === 'ai') return;  // AI mode: wait for Enter
-        clearTimeout(searchTimer);
-        const q = input.value.trim();
-        if (q.length < 2) { results.classList.remove('open'); input.classList.remove('searching'); return; }
-        input.classList.add('searching');
-        searchTimer = setTimeout(() => doSearch(q), 300);
-    });
-
     input.addEventListener('keydown', e => {
-        // AI mode: Enter submits to the AI endpoint
-        if (_searchMode === 'ai') {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                const q = input.value.trim();
-                if (q.length >= 3) {
-                    results.classList.remove('open');
-                    showAIQuery(q);
-                }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const q = input.value.trim();
+            if (q.length >= 3) {
+                results.classList.remove('open');
+                showAIQuery(q);
             }
-            return;
+            return;  // prevent falling through to the dropdown Enter handler below
         }
 
         if (!results.classList.contains('open')) return;
@@ -1721,31 +1716,8 @@ function initSearch() {
         if (e.key === 'Escape') { results.classList.remove('open'); input.setAttribute('aria-expanded', 'false'); input.blur(); }
     });
 
-    _syncSearchModeVisuals(document.getElementById('search-mode-btn'), input);
 }
 
-function _syncSearchModeVisuals(btn, input) {
-    if (_searchMode === 'ai') {
-        if (btn) { btn.classList.add('ai-active'); btn.title = 'Switch back to facility search'; }
-        if (input) { input.placeholder = 'Ask anything, e.g. "BSL-4 labs in Eastern Europe"…'; input.classList.add('ai-mode'); }
-    } else {
-        if (btn) { btn.classList.remove('ai-active'); btn.title = 'Switch to AI natural language search'; }
-        if (input) { input.placeholder = 'Search facilities, organisms…'; input.classList.remove('ai-mode'); }
-    }
-}
-
-function toggleSearchMode() {
-    _searchMode = _searchMode === 'normal' ? 'ai' : 'normal';
-    const btn    = document.getElementById('search-mode-btn');
-    const input  = document.getElementById('search-input');
-    const results = document.getElementById('search-results');
-    _syncSearchModeVisuals(btn, input);
-    if (_searchMode === 'ai') {
-        results.classList.remove('open');
-        input.classList.remove('searching');
-    }
-    input.focus();
-}
 
 const _LAYER_LABEL = { A1: 'Research', A2: 'Defence', G: 'Vaccine' };
 const _LAYER_COLOR = { A1: '#4a8ad4', A2: '#8b1a1a', G: '#0a7a6a' };
@@ -3303,11 +3275,6 @@ function initEventDelegation() {
                 selectSearchResult(el.dataset.entityId, el.dataset.iso3, el.dataset.layer);
                 break;
 
-            // ── Theme ──
-            case 'toggle-theme':
-                toggleTheme();
-                break;
-
             // ── Sidebar / panels ──
             case 'toggle-sidebar':
                 toggleSidebar();
@@ -3326,9 +3293,6 @@ function initEventDelegation() {
                 break;
 
             // ── Search / AI ──
-            case 'toggle-search-mode':
-                toggleSearchMode();
-                break;
             case 'run-ai-query':
                 runAIQuery();
                 break;
