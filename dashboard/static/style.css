@@ -1381,8 +1381,11 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     /* Map: full width, full remaining height */
     #map { flex: 1; width: 100%; }
 
-    /* Filter panel: offset right to clear sidebar toggle button */
-    #filter-panel { left: 48px; width: calc(100vw - 58px); max-width: 280px; }
+    /* Filter panel: anchor to right side so sidebar (left overlay) never covers it */
+    #filter-panel { left: auto; right: 10px; width: calc(100vw - 20px); max-width: 280px; }
+
+    /* Sidebar header: indent content past the fixed sidebar-tab button */
+    .side-header { padding-left: 50px; }
 
     /* Review queue: admin feature, hidden on mobile */
     #navbar-review { display: none !important; }

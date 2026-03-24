@@ -1241,7 +1241,7 @@ function renderFacilityList(facilities) {
             ? `<div class="fac-meta" style="color:#5a6a50">${esc(f.agents_summary.slice(0, 60))}${f.agents_summary.length > 60 ? '…' : ''}</div>`
             : '';
         return `
-            <div class="fac-item" data-action="show-entity" data-entity-id="${esc(f.canonical_facility_id)}"
+            <div class="fac-item" data-action="show-entity" data-entity-id="${esc(f.canonical_facility_id)}">
                 <div class="fac-name">${esc(f.canonical_name || '[Unnamed facility]')}</div>
                 <div class="fac-meta">
                     ${f.latest_containment
@@ -1318,7 +1318,7 @@ function renderDefenceFacilityList(entities) {
                 : `${e.first_year}–${e.last_year}`;
             const bsl = e.has_bsl4 ? `<span style="color:${bslColor('BSL-4')}">BSL-4</span>`
                        : e.has_bsl3 ? `<span style="color:${bslColor('BSL-3')}">BSL-3</span>` : '';
-            return `<div class="fac-item" data-action="show-defence-entity" data-entity-id="${esc(e.canonical_id)}"
+            return `<div class="fac-item" data-action="show-defence-entity" data-entity-id="${esc(e.canonical_id)}">
                 <div class="fac-name">${esc(e.canonical_name || '[Unnamed facility]')}</div>
                 <div class="fac-meta">${bsl ? bsl + ' &nbsp;·&nbsp; ' : ''}${yrs}</div>
             </div>`;
