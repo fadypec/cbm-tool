@@ -2363,7 +2363,7 @@ function renderChangesPanel(data, container) {
             const actionAttrs = c.canonical_facility_id
                 ? `data-action="show-entity" data-entity-id="${esc(c.canonical_facility_id)}"`
                 : `data-action="select-country" data-iso3="${esc(c.country_iso3)}"`;
-            return `<div class="chg-row ${sev.cls}" ${actionAttrs}
+            return `<div class="chg-row ${sev.cls}" ${actionAttrs}>
                 <div class="chg-left">
                     <span class="chg-type-icon">${icon}</span>
                     <div>
