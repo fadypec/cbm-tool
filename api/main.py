@@ -967,7 +967,7 @@ def api_changes_notable(request: Request, min_years: int = Query(default=3, ge=1
     Finds the most significant year-on-year changes across all Form A1 research facilities:
     - BSL-4 or BSL-3 containment area increases / decreases
     - Facilities gaining or losing BSL-4 status
-    - Large personnel changes
+    - Containment level changes
     - Facilities that stopped being declared after N+ years of continuous reporting
     Only considers facilities that had at least `min_years` prior declarations.
     """
@@ -987,7 +987,6 @@ def api_changes_notable(request: Request, min_years: int = Query(default=3, ge=1
                 fy.has_bsl3,
                 fy.bsl3_area_m2,
                 fy.highest_containment,
-                fy.personnel_total,
                 fy.agents_summary
             FROM facility_years fy
             JOIN facilities f ON f.canonical_facility_id = fy.canonical_facility_id
@@ -1063,21 +1062,6 @@ def api_changes_notable(request: Request, min_years: int = Query(default=3, ge=1
                     "from": prev["highest_containment"],
                     "to":   curr["highest_containment"],
                 })
-
-            # Personnel change
-            pp = prev["personnel_total"]
-            cp = curr["personnel_total"]
-            if pp and cp and pp > 0:
-                pct = (cp - pp) / pp * 100
-                if abs(pct) >= 40 and abs(cp - pp) >= 10:
-                    direction = "increased" if pct > 0 else "decreased"
-                    diffs.append({
-                        "type": "personnel_change",
-                        "label": f"Personnel {direction} {abs(pct):.0f}% ({pp}→{cp})",
-                        "severity": "medium",
-                        "delta_pct": round(pct, 1),
-                        "from_count": pp, "to_count": cp,
-                    })
 
             for diff in diffs:
                 changes.append({
