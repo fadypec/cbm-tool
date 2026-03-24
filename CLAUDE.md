@@ -23,7 +23,8 @@ python3 scripts/05_assemble_output.py              # build all CSVs/JSON
 
 # Database
 export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
-bash db/migrate.sh                                 # apply migrations
+bash db/migrate.sh                                 # apply migrations to LOCAL database
+DATABASE_URL="$SUPABASE_URL" bash db/migrate.sh    # apply migrations to PRODUCTION (Supabase)
 python3 scripts/06_load_database.py                # load (preserves geom if already geocoded)
 python3 scripts/dedup_entities.py --apply          # merge fragmented canonical entities
 python3 scripts/07_geocode.py                      # geocode (~2 hrs); only needed after fresh load
@@ -52,7 +53,7 @@ cbm-tool/
 │   ├── index.html
 │   └── static/       app.js, style.css, countries.geojson (choropleth base)
 ├── db/
-│   └── migrations/   001–005 SQL migrations (applied via db/migrate.sh)
+│   └── migrations/   001–018 SQL migrations (applied via db/migrate.sh)
 ├── data/
 │   ├── raw_pdfs/
 │   ├── extracted_text/
@@ -126,10 +127,31 @@ token_sort_ratio ≥ 85. Canonical IDs: `{ISO3}_{N:03d}`.
 ## Deployment
 
 - **Production**: Railway (Amsterdam) — auto-deploys from GitHub `main`
-- **Database**: Supabase PostgreSQL (EU West / Ireland)
+- **Database**: Supabase PostgreSQL (EU West / Ireland) — connection string in `.env` as `SUPABASE_URL`
 - **Env vars required**: `DATABASE_URL`, `ANTHROPIC_API_KEY`, `REVIEW_API_KEY`
 - **Healthcheck**: Railway checks `GET /health` (set in Railway service settings)
 - **Port**: Dockerfile CMD uses `${PORT:-8000}`; Railway injects `$PORT`
+
+## Database deployment workflow (CRITICAL)
+
+**Database changes must be applied to both local AND Supabase, just as code changes are pushed to GitHub.**
+
+After writing any new migration file in `db/migrations/`:
+
+```bash
+export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+# 1. Apply locally
+bash db/migrate.sh
+# 2. Apply to production
+DATABASE_URL="$SUPABASE_URL" bash db/migrate.sh
+```
+
+`SUPABASE_URL` is set in `.env` (gitignored). Never skip the production step.
+
+**Before running any migration that DELETEs or TRUNCATEs rows on production:**
+1. State exactly what will be deleted and how many rows
+2. Get explicit confirmation before proceeding
+3. Consider taking a Supabase backup first (Dashboard → Database → Backups)
 
 ## Dashboard (dashboard/)
 
@@ -150,6 +172,7 @@ RATE_LIMIT_DELAY=10s (≤6 RPM). `parse_json_response` returns `dict | None`.
 - Running `python3 scripts/07_geocode.py` after a reload that may have cleared geocoded geometry
 - Running `python3 scripts/dedup_entities.py --apply` (rewrites canonical IDs)
 - Any SQL `DELETE`, `TRUNCATE`, or `UPDATE` that touches more than a handful of rows
+- Any migration that deletes data before applying it to Supabase (state row count, get confirmation)
 - Any pipeline step that overwrites files in `data/structured/` or `data/output/`
 
 Before proceeding, state what data will be affected and wait for an explicit "yes, go ahead".
