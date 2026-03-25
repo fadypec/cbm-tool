@@ -185,6 +185,11 @@ MERGES = [
     ("CZE_004", ["CZE_013"],
         "Institute of Molecular Pathology (IMP)"),
 
+    # ── CZE_005 post-merge split fix ──────────────────────────────────────
+    # CZE_005 incorrectly contains a Praha row (2011, department Prague)
+    # alongside Těchonín rows.  After merge, split the Praha row into CZE_018.
+    # Handled by SPLITS below — not a merge.
+
     # ── Slovenia ─────────────────────────────────────────────────────────────
     ("SVN_003", ["SVN_005"],
         "Mobile Laboratory"),
@@ -729,6 +734,92 @@ def apply_defence_merge(
     print(f"  [OK] Deleted {cur.rowcount} deprecated defence_entity rows: {found_deprecated}")
 
 
+# ── Row-level splits ────────────────────────────────────────────────────────
+# Each entry: (source_entity, new_entity_id, new_canonical_name, sql_filter)
+# The sql_filter is a WHERE clause fragment applied to facility_years to select
+# which rows to move from source_entity to the new entity.
+
+SPLITS = [
+    # CZE_005 contains a Praha row (2011) that belongs to a separate facility.
+    ("CZE_005", "CZE_018", "Central Military Health Institute, department Prague",
+     "city = 'Praha' AND year = 2011"),
+]
+
+
+def apply_split(cur, source_id: str, new_id: str, new_name: str, row_filter: str) -> None:
+    """Split rows matching row_filter out of source_id into a new entity."""
+    # Check source exists
+    source = fetch_entity(cur, source_id)
+    if not source:
+        print(f"  [SKIP] Source '{source_id}' not found — skipping split")
+        return
+
+    # Check if new entity already exists (idempotent)
+    existing = fetch_entity(cur, new_id)
+    if existing:
+        print(f"  [SKIP] Target '{new_id}' already exists — split already applied")
+        return
+
+    # Count rows to move
+    cur.execute(
+        f"SELECT count(*) FROM facility_years "
+        f"WHERE canonical_facility_id = %s AND {row_filter}",
+        (source_id,),
+    )
+    n = cur.fetchone()["count"]
+    if n == 0:
+        print(f"  [SKIP] No rows match filter for split {source_id} → {new_id}")
+        return
+
+    # Create the new facility entity
+    cur.execute("""
+        INSERT INTO facilities (canonical_facility_id, canonical_name, country_iso3,
+                                all_names, years_declared)
+        VALUES (%s, %s, %s, %s, ARRAY[]::int[])
+    """, (new_id, new_name, source["country_iso3"], [new_name]))
+
+    # Move matching rows
+    cur.execute(
+        f"UPDATE facility_years SET canonical_facility_id = %s "
+        f"WHERE canonical_facility_id = %s AND {row_filter}",
+        (new_id, source_id),
+    )
+    print(f"  [OK] Split {n} row(s) from {source_id} → {new_id} ({new_name})")
+
+    # Recompute years_declared for both entities
+    for eid in (source_id, new_id):
+        cur.execute("""
+            UPDATE facilities
+            SET years_declared = (
+                SELECT ARRAY_AGG(DISTINCT year ORDER BY year)
+                FROM facility_years WHERE canonical_facility_id = %s
+            )
+            WHERE canonical_facility_id = %s
+        """, (eid, eid))
+
+
+def print_split_plan(cur, source_id: str, new_id: str, new_name: str, row_filter: str) -> None:
+    """Print what this split would do."""
+    source = fetch_entity(cur, source_id)
+    if not source:
+        print(f"  [WARN] Source '{source_id}' not found — will be skipped")
+        return
+    existing = fetch_entity(cur, new_id)
+    if existing:
+        print(f"  [INFO] Target '{new_id}' already exists — split already applied")
+        return
+    cur.execute(
+        f"SELECT count(*) FROM facility_years "
+        f"WHERE canonical_facility_id = %s AND {row_filter}",
+        (source_id,),
+    )
+    n = cur.fetchone()["count"]
+    print(f"\n  SPLIT: {source_id} → {new_id}")
+    print(f"    filter: {row_filter}")
+    print(f"    rows to move: {n}")
+    print(f"    new name: {new_name}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -741,6 +832,7 @@ def main() -> None:
 
     mode = "APPLY" if args.apply else "DRY-RUN"
     print(f"=== dedup_entities.py — {mode} ===")
+    print(f"Row-level splits:               {len(SPLITS)}")
     print(f"Research facility merge groups: {len(MERGES)}")
     print(f"Vaccine facility merge groups:  {len(VACCINE_MERGES)}")
     print(f"Defence facility merge groups:  {len(DEFENCE_MERGES)}")
@@ -754,7 +846,11 @@ def main() -> None:
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # Always print the merge plan first
+            # Always print plans first
+            print("\n--- ROW-LEVEL SPLIT PLAN ---")
+            for source_id, new_id, new_name, row_filter in SPLITS:
+                print_split_plan(cur, source_id, new_id, new_name, row_filter)
+
             print("\n--- RESEARCH FACILITY MERGE PLAN ---")
             for keeper_id, deprecated_ids, new_name in MERGES:
                 print_merge_plan(cur, keeper_id, deprecated_ids, new_name)
@@ -770,6 +866,12 @@ def main() -> None:
             if not args.apply:
                 print("\n[DRY-RUN] No changes made. Pass --apply to execute.")
                 return
+
+            # Apply splits first (before merges, so source entities are intact)
+            print("\n--- APPLYING ROW-LEVEL SPLITS ---")
+            for source_id, new_id, new_name, row_filter in SPLITS:
+                print(f"\nSplit: {source_id} → {new_id}")
+                apply_split(cur, source_id, new_id, new_name, row_filter)
 
             # Apply merges
             print("\n--- APPLYING RESEARCH FACILITY MERGES ---")

@@ -361,9 +361,12 @@ def process_pdf(entry: dict, *, force: bool = False) -> dict | None:
         log.warning("[%s] PDF not found: %s", entry_id, pdf_path)
         return None
 
-    # Skip if already extracted (incremental mode)
-    txt_path = EXTRACTED_DIR / f"{entry_id}.txt"
-    if not force and txt_path.exists() and txt_path.stat().st_size > 0:
+    # Skip if already extracted (incremental mode).
+    # Both .txt and _pages.json must exist — a crash between writing them
+    # would leave incomplete output that downstream scripts depend on.
+    txt_path   = EXTRACTED_DIR / f"{entry_id}.txt"
+    pages_path = EXTRACTED_DIR / f"{entry_id}_pages.json"
+    if not force and txt_path.exists() and txt_path.stat().st_size > 0 and pages_path.exists():
         return entry  # already processed
 
     # ── pdfplumber pass ───────────────────────────────────────────────────────

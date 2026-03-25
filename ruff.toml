@@ -1,0 +1,28 @@
+# Ruff linter configuration for API + tests.
+# Pipeline scripts (scripts/) are excluded — they use a different style and
+# are not deployed to production.
+
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit (security)
+]
+ignore = [
+    "E501",  # line too long — handled by formatter
+    "S101",  # assert in tests is fine
+    "S603",  # subprocess calls — not applicable here
+    "S608",  # SQL injection — we use parameterised queries; f-string SQL is for
+             # column/table names only (never user input)
+]
+
+[lint.per-file-ignores]
+"api/main.py" = ["E402", "I001"]  # logging must be configured before third-party imports
+"tests/*" = ["S", "B", "I001"]    # relax security/bugbear rules in tests; env var setup before imports

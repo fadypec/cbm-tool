@@ -4,6 +4,8 @@ All tests run against a mocked database — no real PostgreSQL connection needed
 Run with:
     pytest tests/test_api.py -v
 """
+
+import json
 import os
 import pytest
 from unittest.mock import MagicMock, patch
@@ -13,12 +15,13 @@ os.environ.setdefault("DATABASE_URL", "postgresql://cbm:cbm@localhost/cbm")
 os.environ.setdefault("REVIEW_API_KEY", "test-review-key")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from api.main import app                   # noqa: E402
+from api.main import app  # noqa: E402
 
 REVIEW_KEY = os.environ["REVIEW_API_KEY"]
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture()
 def mock_pool():
@@ -49,6 +52,7 @@ def _setup_cursor(mock_pool, *, fetchone=None, fetchall=None, rowcount=1):
 
 # ── /health ───────────────────────────────────────────────────────────────────
 
+
 class TestHealth:
     def test_returns_200(self, client):
         c, _ = client
@@ -65,6 +69,7 @@ class TestHealth:
 
 
 # ── /ready ─────────────────────────────────────────────────────────────────────
+
 
 class TestReady:
     def test_returns_ready_when_db_ok(self, client):
@@ -83,6 +88,7 @@ class TestReady:
 
 
 # ── Security headers ──────────────────────────────────────────────────────────
+
 
 class TestSecurityHeaders:
     """Every response must carry the mandatory security headers."""
@@ -111,6 +117,7 @@ class TestSecurityHeaders:
 
 # ── 404 handling ──────────────────────────────────────────────────────────────
 
+
 class TestNotFound:
     def test_unknown_route(self, client):
         c, _ = client
@@ -134,6 +141,7 @@ class TestNotFound:
 
 
 # ── Auth guards ───────────────────────────────────────────────────────────────
+
 
 class TestAuthGuards:
     def test_flag_without_key_rejected(self, client):
@@ -175,6 +183,7 @@ class TestAuthGuards:
 
 # ── /api/search input validation ─────────────────────────────────────────────
 
+
 class TestSearchValidation:
     def test_very_long_query_does_not_cause_500(self, client):
         c, pool = client
@@ -184,20 +193,23 @@ class TestSearchValidation:
 
     def test_search_returns_list(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[
-            {
-                "canonical_facility_id": "DEU_001",
-                "canonical_name": "Robert Koch Institut",
-                "country_iso3": "DEU",
-                "country_name": "Germany",
-                "years_declared": [2015, 2016],
-                "latest_containment": "BSL-3",
-                "latest_area_m2": None,
-                "agents_summary": "influenza",
-                "lat": 52.5,
-                "lon": 13.4,
-            }
-        ])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "canonical_facility_id": "DEU_001",
+                    "canonical_name": "Robert Koch Institut",
+                    "country_iso3": "DEU",
+                    "country_name": "Germany",
+                    "years_declared": [2015, 2016],
+                    "latest_containment": "BSL-3",
+                    "latest_area_m2": None,
+                    "agents_summary": "influenza",
+                    "lat": 52.5,
+                    "lon": 13.4,
+                }
+            ],
+        )
         r = c.get("/api/search?q=robert+koch")
         assert r.status_code == 200
         data = r.json()
@@ -206,20 +218,24 @@ class TestSearchValidation:
 
 # ── /api/countries ────────────────────────────────────────────────────────────
 
+
 class TestCountries:
     def test_returns_list(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[
-            {
-                "country_iso3": "DEU",
-                "country_name": "Germany",
-                "submission_count": 10,
-                "latest_year": 2024,
-                "facility_count": 5,
-                "bsl4_count": 1,
-                "a1_rate": "0.900",
-            }
-        ])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "country_iso3": "DEU",
+                    "country_name": "Germany",
+                    "submission_count": 10,
+                    "latest_year": 2024,
+                    "facility_count": 5,
+                    "bsl4_count": 1,
+                    "a1_rate": "0.900",
+                }
+            ],
+        )
         r = c.get("/api/countries")
         assert r.status_code == 200
         body = r.json()
@@ -228,6 +244,7 @@ class TestCountries:
 
 
 # ── /api/country/{iso3} ───────────────────────────────────────────────────────
+
 
 class TestCountryDetail:
     def test_known_country_returns_200(self, client):
@@ -257,22 +274,26 @@ class TestCountryDetail:
 
 # ── /api/stats ──────────────────────────────────────────────────────────────
 
+
 class TestStats:
     def test_returns_summary(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchone={
-            "total_submissions": 517,
-            "total_countries": 45,
-            "total_facility_years": 1600,
-            "total_unique_facilities": 457,
-            "geocoded_facility_years": 1400,
-            "vaccine_facility_years": 599,
-            "defence_facility_years": 969,
-            "total_unique_vaccine": 120,
-            "total_unique_defence": 85,
-            "year_min": 1987,
-            "year_max": 2025,
-        })
+        _setup_cursor(
+            pool,
+            fetchone={
+                "total_submissions": 517,
+                "total_countries": 45,
+                "total_facility_years": 1600,
+                "total_unique_facilities": 457,
+                "geocoded_facility_years": 1400,
+                "vaccine_facility_years": 599,
+                "defence_facility_years": 969,
+                "total_unique_vaccine": 120,
+                "total_unique_defence": 85,
+                "year_min": 1987,
+                "year_max": 2025,
+            },
+        )
         r = c.get("/api/stats")
         assert r.status_code == 200
         body = r.json()
@@ -283,32 +304,42 @@ class TestStats:
 
     def test_contains_all_expected_keys(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchone={
-            "total_submissions": 1,
-            "total_countries": 1,
-            "total_facility_years": 0,
-            "total_unique_facilities": 0,
-            "geocoded_facility_years": 0,
-            "vaccine_facility_years": 0,
-            "defence_facility_years": 0,
-            "total_unique_vaccine": 0,
-            "total_unique_defence": 0,
-            "year_min": 2020,
-            "year_max": 2020,
-        })
+        _setup_cursor(
+            pool,
+            fetchone={
+                "total_submissions": 1,
+                "total_countries": 1,
+                "total_facility_years": 0,
+                "total_unique_facilities": 0,
+                "geocoded_facility_years": 0,
+                "vaccine_facility_years": 0,
+                "defence_facility_years": 0,
+                "total_unique_vaccine": 0,
+                "total_unique_defence": 0,
+                "year_min": 2020,
+                "year_max": 2020,
+            },
+        )
         r = c.get("/api/stats")
         body = r.json()
         expected_keys = {
-            "total_submissions", "total_countries", "total_facility_years",
-            "total_unique_facilities", "geocoded_facility_years",
-            "vaccine_facility_years", "defence_facility_years",
-            "total_unique_vaccine", "total_unique_defence",
-            "year_min", "year_max",
+            "total_submissions",
+            "total_countries",
+            "total_facility_years",
+            "total_unique_facilities",
+            "geocoded_facility_years",
+            "vaccine_facility_years",
+            "defence_facility_years",
+            "total_unique_vaccine",
+            "total_unique_defence",
+            "year_min",
+            "year_max",
         }
         assert expected_keys == set(body.keys())
 
 
 # ── /api/bwc-membership ─────────────────────────────────────────────────────
+
 
 class TestBwcMembership:
     def test_returns_membership_dict(self, client):
@@ -345,25 +376,38 @@ class TestBwcMembership:
 
 # ── /api/country/{iso3}/defence ──────────────────────────────────────────────
 
+
 class TestCountryDefence:
     def test_returns_programmes_and_entities(self, client):
         c, pool = client
         cur = _setup_cursor(pool)
         cur.fetchall.side_effect = [
             # programmes
-            [{
-                "year": 2024, "programme_name": "Bundeswehr Bio Defence",
-                "responsible_org": "BMVg", "objectives_summary": "Protection",
-                "research_areas": "diagnostics", "total_funding_amount": 5000000,
-                "total_funding_currency": "EUR", "uses_contractors": True,
-                "contractor_proportion_pct": 15, "confidence": "high",
-            }],
+            [
+                {
+                    "year": 2024,
+                    "programme_name": "Bundeswehr Bio Defence",
+                    "responsible_org": "BMVg",
+                    "objectives_summary": "Protection",
+                    "research_areas": "diagnostics",
+                    "total_funding_amount": 5000000,
+                    "total_funding_currency": "EUR",
+                    "uses_contractors": True,
+                    "contractor_proportion_pct": 15,
+                    "confidence": "high",
+                }
+            ],
             # entities
-            [{
-                "canonical_id": "DEU_D001", "canonical_name": "WIS Munster",
-                "first_year": 2015, "last_year": 2024,
-                "has_bsl4": False, "has_bsl3": True,
-            }],
+            [
+                {
+                    "canonical_id": "DEU_D001",
+                    "canonical_name": "WIS Munster",
+                    "first_year": 2015,
+                    "last_year": 2024,
+                    "has_bsl4": False,
+                    "has_bsl3": True,
+                }
+            ],
         ]
         r = c.get("/api/country/DEU/defence")
         assert r.status_code == 200
@@ -389,27 +433,34 @@ class TestCountryDefence:
 
 # ── /api/country/{iso3}/vaccine ──────────────────────────────────────────────
 
+
 class TestCountryVaccine:
     def test_returns_entities_and_records(self, client):
         c, pool = client
         cur = _setup_cursor(pool)
         cur.fetchall.side_effect = [
             # entities
-            [{
-                "canonical_id": "GBR_V001",
-                "canonical_name": "Porton Biopharma Ltd",
-                "first_year": 2015, "last_year": 2024,
-            }],
+            [
+                {
+                    "canonical_id": "GBR_V001",
+                    "canonical_name": "Porton Biopharma Ltd",
+                    "first_year": 2015,
+                    "last_year": 2024,
+                }
+            ],
             # records
-            [{
-                "year": 2024,
-                "canonical_vaccine_facility_id": "GBR_V001",
-                "facility_name": "Porton Biopharma Ltd",
-                "city": "Salisbury", "address": "Manor Farm Rd",
-                "diseases_covered": "anthrax, tuberculosis",
-                "vaccines_summary": "Anthrax vaccine production",
-                "confidence": "high",
-            }],
+            [
+                {
+                    "year": 2024,
+                    "canonical_vaccine_facility_id": "GBR_V001",
+                    "facility_name": "Porton Biopharma Ltd",
+                    "city": "Salisbury",
+                    "address": "Manor Farm Rd",
+                    "diseases_covered": "anthrax, tuberculosis",
+                    "vaccines_summary": "Anthrax vaccine production",
+                    "confidence": "high",
+                }
+            ],
         ]
         r = c.get("/api/country/GBR/vaccine")
         assert r.status_code == 200
@@ -431,33 +482,39 @@ class TestCountryVaccine:
 
 # ── /api/country/{iso3}/legislation ──────────────────────────────────────────
 
+
 class TestCountryLegislation:
     def test_returns_legislation_records(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[{
-            "year": 2024,
-            "prohibitions_legislation": True,
-            "prohibitions_regulations": True,
-            "prohibitions_other_measures": False,
-            "prohibitions_amended": False,
-            "exports_legislation": True,
-            "exports_regulations": True,
-            "exports_other_measures": False,
-            "exports_amended": False,
-            "imports_legislation": True,
-            "imports_regulations": False,
-            "imports_other_measures": False,
-            "imports_amended": False,
-            "biosafety_legislation": True,
-            "biosafety_regulations": True,
-            "biosafety_other_measures": True,
-            "biosafety_amended": False,
-            "key_laws": ["Biological Weapons Act 1974"],
-            "notes": None,
-            "confidence": "high",
-            "document_id": 42,
-            "source_url": "https://example.com/doc.pdf",
-        }])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "year": 2024,
+                    "prohibitions_legislation": True,
+                    "prohibitions_regulations": True,
+                    "prohibitions_other_measures": False,
+                    "prohibitions_amended": False,
+                    "exports_legislation": True,
+                    "exports_regulations": True,
+                    "exports_other_measures": False,
+                    "exports_amended": False,
+                    "imports_legislation": True,
+                    "imports_regulations": False,
+                    "imports_other_measures": False,
+                    "imports_amended": False,
+                    "biosafety_legislation": True,
+                    "biosafety_regulations": True,
+                    "biosafety_other_measures": True,
+                    "biosafety_amended": False,
+                    "key_laws": ["Biological Weapons Act 1974"],
+                    "notes": None,
+                    "confidence": "high",
+                    "document_id": 42,
+                    "source_url": "https://example.com/doc.pdf",
+                }
+            ],
+        )
         r = c.get("/api/country/GBR/legislation")
         assert r.status_code == 200
         body = r.json()
@@ -475,23 +532,29 @@ class TestCountryLegislation:
 
 # ── /api/country/{iso3}/past-programmes ──────────────────────────────────────
 
+
 class TestCountryPastProgrammes:
     def test_returns_past_programme_records(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[{
-            "year": 2023,
-            "convention_entry_date": "1975-03-26",
-            "has_offensive_programme": False,
-            "offensive_period": None,
-            "offensive_summary": None,
-            "has_defensive_programme": True,
-            "defensive_period": "1940-1979",
-            "defensive_summary": "Gruinard Island programme (terminated 1979)",
-            "confidence": "high",
-            "notes": None,
-            "document_id": 99,
-            "source_url": "https://example.com/gbr_2023.pdf",
-        }])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "year": 2023,
+                    "convention_entry_date": "1975-03-26",
+                    "has_offensive_programme": False,
+                    "offensive_period": None,
+                    "offensive_summary": None,
+                    "has_defensive_programme": True,
+                    "defensive_period": "1940-1979",
+                    "defensive_summary": "Gruinard Island programme (terminated 1979)",
+                    "confidence": "high",
+                    "notes": None,
+                    "document_id": 99,
+                    "source_url": "https://example.com/gbr_2023.pdf",
+                }
+            ],
+        )
         r = c.get("/api/country/GBR/past-programmes")
         assert r.status_code == 200
         body = r.json()
@@ -509,6 +572,7 @@ class TestCountryPastProgrammes:
 
 # ── /api/entity/{entity_id} (research facility) ─────────────────────────────
 
+
 class TestEntityDetail:
     def test_returns_entity_with_year_records(self, client):
         c, pool = client
@@ -523,20 +587,28 @@ class TestEntityDetail:
             "latest_area_m2": 1200,
             "country_name": "Germany",
         }
-        cur.fetchall.return_value = [{
-            "year": 2024, "document_id": 10,
-            "facility_name": "Robert Koch Institut",
-            "responsible_org": "BMG",
-            "city": "Berlin", "address": "Nordufer 20",
-            "has_bsl4": False, "bsl4_area_m2": 0,
-            "has_bsl3": True, "bsl3_area_m2": 1200,
-            "highest_containment": "BSL-3",
-            "agents_summary": "influenza, SARS-CoV-2",
-            "mod_funded": False, "confidence": "high",
-            "geocode_confidence": "exact",
-            "source_url": "https://example.com/deu_2024.pdf",
-            "flagged_for_review": False, "flag_note": None,
-        }]
+        cur.fetchall.return_value = [
+            {
+                "year": 2024,
+                "document_id": 10,
+                "facility_name": "Robert Koch Institut",
+                "responsible_org": "BMG",
+                "city": "Berlin",
+                "address": "Nordufer 20",
+                "has_bsl4": False,
+                "bsl4_area_m2": 0,
+                "has_bsl3": True,
+                "bsl3_area_m2": 1200,
+                "highest_containment": "BSL-3",
+                "agents_summary": "influenza, SARS-CoV-2",
+                "mod_funded": False,
+                "confidence": "high",
+                "geocode_confidence": "exact",
+                "source_url": "https://example.com/deu_2024.pdf",
+                "flagged_for_review": False,
+                "flag_note": None,
+            }
+        ]
         r = c.get("/api/entity/DEU_001")
         assert r.status_code == 200
         body = r.json()
@@ -555,6 +627,7 @@ class TestEntityDetail:
 
 # ── /api/entity/defence/{entity_id} ─────────────────────────────────────────
 
+
 class TestDefenceEntityDetail:
     def test_returns_defence_entity(self, client):
         c, pool = client
@@ -568,22 +641,35 @@ class TestDefenceEntityDetail:
             "first_year": 2012,
             "last_year": 2024,
         }
-        cur.fetchall.return_value = [{
-            "year": 2024, "facility_name": "Dstl Porton Down",
-            "city": "Salisbury", "address": "Manor Farm Rd",
-            "bsl2_area_m2": 500, "bsl3_area_m2": 200, "bsl4_area_m2": 50,
-            "total_lab_area_m2": 750,
-            "personnel_total": 300, "personnel_military": 20,
-            "personnel_civilian": 280,
-            "personnel_scientists": 150, "personnel_engineers": 30,
-            "personnel_technicians": 60, "personnel_admin": 40,
-            "mod_funded": True, "work_description": "Bio defence research",
-            "funding_source": "MOD", "funding_research": 10000000,
-            "funding_development": 5000000, "funding_te": 2000000,
-            "funding_currency": "GBP",
-            "confidence": "high", "geocode_confidence": "exact",
-            "source_url": "https://example.com/gbr_2024.pdf",
-        }]
+        cur.fetchall.return_value = [
+            {
+                "year": 2024,
+                "facility_name": "Dstl Porton Down",
+                "city": "Salisbury",
+                "address": "Manor Farm Rd",
+                "bsl2_area_m2": 500,
+                "bsl3_area_m2": 200,
+                "bsl4_area_m2": 50,
+                "total_lab_area_m2": 750,
+                "personnel_total": 300,
+                "personnel_military": 20,
+                "personnel_civilian": 280,
+                "personnel_scientists": 150,
+                "personnel_engineers": 30,
+                "personnel_technicians": 60,
+                "personnel_admin": 40,
+                "mod_funded": True,
+                "work_description": "Bio defence research",
+                "funding_source": "MOD",
+                "funding_research": 10000000,
+                "funding_development": 5000000,
+                "funding_te": 2000000,
+                "funding_currency": "GBP",
+                "confidence": "high",
+                "geocode_confidence": "exact",
+                "source_url": "https://example.com/gbr_2024.pdf",
+            }
+        ]
         r = c.get("/api/entity/defence/GBR_D001")
         assert r.status_code == 200
         body = r.json()
@@ -600,6 +686,7 @@ class TestDefenceEntityDetail:
 
 # ── /api/entity/vaccine/{entity_id} ─────────────────────────────────────────
 
+
 class TestVaccineEntityDetail:
     def test_returns_vaccine_entity(self, client):
         c, pool = client
@@ -612,15 +699,19 @@ class TestVaccineEntityDetail:
             "last_year": 2024,
             "country_name": "Germany",
         }
-        cur.fetchall.return_value = [{
-            "year": 2024, "document_id": 55,
-            "facility_name": "Paul-Ehrlich-Institut",
-            "city": "Langen", "address": "Paul-Ehrlich-Str. 51-59",
-            "diseases_covered": "influenza, measles",
-            "vaccines_summary": "Vaccine quality control and batch release",
-            "confidence": "high",
-            "source_url": "https://example.com/deu_2024.pdf",
-        }]
+        cur.fetchall.return_value = [
+            {
+                "year": 2024,
+                "document_id": 55,
+                "facility_name": "Paul-Ehrlich-Institut",
+                "city": "Langen",
+                "address": "Paul-Ehrlich-Str. 51-59",
+                "diseases_covered": "influenza, measles",
+                "vaccines_summary": "Vaccine quality control and batch release",
+                "confidence": "high",
+                "source_url": "https://example.com/deu_2024.pdf",
+            }
+        ]
         r = c.get("/api/entity/vaccine/DEU_V001")
         assert r.status_code == 200
         body = r.json()
@@ -638,23 +729,29 @@ class TestVaccineEntityDetail:
 
 # ── /api/map/facilities (GeoJSON) ───────────────────────────────────────────
 
+
 class TestMapFacilities:
     def test_returns_geojson_feature_collection(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[{
-            "canonical_facility_id": "DEU_001",
-            "name": "Robert Koch Institut",
-            "country_iso3": "DEU",
-            "containment": "BSL-3",
-            "year": 2024,
-            "city": "Berlin",
-            "geocode_confidence": "exact",
-            "lon": 13.3530,
-            "lat": 52.5320,
-            "country_name": "Germany",
-            "agents_summary": "influenza, SARS-CoV-2",
-            "agents_redacted": False,
-        }])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "canonical_facility_id": "DEU_001",
+                    "name": "Robert Koch Institut",
+                    "country_iso3": "DEU",
+                    "containment": "BSL-3",
+                    "year": 2024,
+                    "city": "Berlin",
+                    "geocode_confidence": "exact",
+                    "lon": 13.3530,
+                    "lat": 52.5320,
+                    "country_name": "Germany",
+                    "agents_summary": "influenza, SARS-CoV-2",
+                    "agents_redacted": False,
+                }
+            ],
+        )
         r = c.get("/api/map/facilities")
         assert r.status_code == 200
         body = r.json()
@@ -681,20 +778,26 @@ class TestMapFacilities:
 
 # ── /api/map/defence (GeoJSON) ──────────────────────────────────────────────
 
+
 class TestMapDefence:
     def test_returns_geojson_feature_collection(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[{
-            "id": 42,
-            "name": "Dstl Porton Down",
-            "country_iso3": "GBR",
-            "year": 2024,
-            "city": "Salisbury",
-            "geocode_confidence": "exact",
-            "lon": -1.7954,
-            "lat": 51.0691,
-            "country_name": "United Kingdom",
-        }])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "id": 42,
+                    "name": "Dstl Porton Down",
+                    "country_iso3": "GBR",
+                    "year": 2024,
+                    "city": "Salisbury",
+                    "geocode_confidence": "exact",
+                    "lon": -1.7954,
+                    "lat": 51.0691,
+                    "country_name": "United Kingdom",
+                }
+            ],
+        )
         r = c.get("/api/map/defence")
         assert r.status_code == 200
         body = r.json()
@@ -714,20 +817,26 @@ class TestMapDefence:
 
 # ── /api/map/vaccines (GeoJSON) ─────────────────────────────────────────────
 
+
 class TestMapVaccines:
     def test_returns_geojson_feature_collection(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[{
-            "id": "DEU_V001",
-            "name": "Paul-Ehrlich-Institut",
-            "country_iso3": "DEU",
-            "year": 2024,
-            "city": "Langen",
-            "geocode_confidence": "exact",
-            "lon": 8.6565,
-            "lat": 50.0002,
-            "country_name": "Germany",
-        }])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "id": "DEU_V001",
+                    "name": "Paul-Ehrlich-Institut",
+                    "country_iso3": "DEU",
+                    "year": 2024,
+                    "city": "Langen",
+                    "geocode_confidence": "exact",
+                    "lon": 8.6565,
+                    "lat": 50.0002,
+                    "country_name": "Germany",
+                }
+            ],
+        )
         r = c.get("/api/map/vaccines")
         assert r.status_code == 200
         body = r.json()
@@ -747,15 +856,21 @@ class TestMapVaccines:
 
 # ── /api/map/compliance ─────────────────────────────────────────────────────
 
+
 class TestMapCompliance:
     def test_default_compliance_returns_list(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[{
-            "country_iso3": "DEU",
-            "country_name": "Germany",
-            "submission_count": 12,
-            "a1_rate": 0.917,
-        }])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "country_iso3": "DEU",
+                    "country_name": "Germany",
+                    "submission_count": 12,
+                    "a1_rate": 0.917,
+                }
+            ],
+        )
         r = c.get("/api/map/compliance")
         assert r.status_code == 200
         body = r.json()
@@ -765,12 +880,17 @@ class TestMapCompliance:
 
     def test_form_specific_compliance(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[{
-            "country_iso3": "GBR",
-            "country_name": "United Kingdom",
-            "submission_count": 10,
-            "rate": 0.800,
-        }])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "country_iso3": "GBR",
+                    "country_name": "United Kingdom",
+                    "submission_count": 10,
+                    "rate": 0.800,
+                }
+            ],
+        )
         r = c.get("/api/map/compliance/G")
         assert r.status_code == 200
         body = r.json()
@@ -793,14 +913,18 @@ class TestMapCompliance:
 
 # ── /api/stats/timeline ─────────────────────────────────────────────────────
 
+
 class TestTimeline:
     def test_returns_yearly_arrays(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[
-            {"year": 2020, "a1_facility_years": 80, "bsl4_facility_years": 5, "submitting_countries": 30},
-            {"year": 2021, "a1_facility_years": 90, "bsl4_facility_years": 6, "submitting_countries": 32},
-            {"year": 2022, "a1_facility_years": 95, "bsl4_facility_years": 7, "submitting_countries": 33},
-        ])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {"year": 2020, "a1_facility_years": 80, "bsl4_facility_years": 5, "submitting_countries": 30},
+                {"year": 2021, "a1_facility_years": 90, "bsl4_facility_years": 6, "submitting_countries": 32},
+                {"year": 2022, "a1_facility_years": 95, "bsl4_facility_years": 7, "submitting_countries": 33},
+            ],
+        )
         r = c.get("/api/stats/timeline")
         assert r.status_code == 200
         body = r.json()
@@ -821,25 +945,29 @@ class TestTimeline:
 
 # ── /api/stats/bsl4-capacity ────────────────────────────────────────────────
 
+
 class TestBsl4Capacity:
     def test_returns_per_country_year_data(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[
-            {
-                "year": 2023,
-                "country_iso3": "DEU",
-                "country_name": "Germany",
-                "total_bsl4_area_m2": 2500.0,
-                "bsl4_facility_count": 3,
-            },
-            {
-                "year": 2023,
-                "country_iso3": "GBR",
-                "country_name": "United Kingdom",
-                "total_bsl4_area_m2": 1800.0,
-                "bsl4_facility_count": 2,
-            },
-        ])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "year": 2023,
+                    "country_iso3": "DEU",
+                    "country_name": "Germany",
+                    "total_bsl4_area_m2": 2500.0,
+                    "bsl4_facility_count": 3,
+                },
+                {
+                    "year": 2023,
+                    "country_iso3": "GBR",
+                    "country_name": "United Kingdom",
+                    "total_bsl4_area_m2": 1800.0,
+                    "bsl4_facility_count": 2,
+                },
+            ],
+        )
         r = c.get("/api/stats/bsl4-capacity")
         assert r.status_code == 200
         body = r.json()
@@ -858,40 +986,59 @@ class TestBsl4Capacity:
 
 # ── /api/changes/notable ────────────────────────────────────────────────────
 
+
 class TestNotableChanges:
     def test_detects_bsl4_gained(self, client):
         """A facility that gains BSL-4 status should appear as a notable change."""
         c, pool = client
         # Endpoint runs one big query, then does Python-side diff computation
-        _setup_cursor(pool, fetchall=[
-            {
-                "canonical_facility_id": "DEU_001",
-                "facility_name": "Friedrich-Loeffler-Institut",
-                "country_iso3": "DEU", "country_name": "Germany",
-                "year": 2018, "has_bsl4": False, "bsl4_area_m2": 0,
-                "has_bsl3": True, "bsl3_area_m2": 500,
-                "highest_containment": "BSL-3",
-                "personnel_total": None, "agents_summary": None,
-            },
-            {
-                "canonical_facility_id": "DEU_001",
-                "facility_name": "Friedrich-Loeffler-Institut",
-                "country_iso3": "DEU", "country_name": "Germany",
-                "year": 2019, "has_bsl4": False, "bsl4_area_m2": 0,
-                "has_bsl3": True, "bsl3_area_m2": 500,
-                "highest_containment": "BSL-3",
-                "personnel_total": None, "agents_summary": None,
-            },
-            {
-                "canonical_facility_id": "DEU_001",
-                "facility_name": "Friedrich-Loeffler-Institut",
-                "country_iso3": "DEU", "country_name": "Germany",
-                "year": 2020, "has_bsl4": True, "bsl4_area_m2": 200,
-                "has_bsl3": True, "bsl3_area_m2": 500,
-                "highest_containment": "BSL-4",
-                "personnel_total": None, "agents_summary": None,
-            },
-        ])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "canonical_facility_id": "DEU_001",
+                    "facility_name": "Friedrich-Loeffler-Institut",
+                    "country_iso3": "DEU",
+                    "country_name": "Germany",
+                    "year": 2018,
+                    "has_bsl4": False,
+                    "bsl4_area_m2": 0,
+                    "has_bsl3": True,
+                    "bsl3_area_m2": 500,
+                    "highest_containment": "BSL-3",
+                    "personnel_total": None,
+                    "agents_summary": None,
+                },
+                {
+                    "canonical_facility_id": "DEU_001",
+                    "facility_name": "Friedrich-Loeffler-Institut",
+                    "country_iso3": "DEU",
+                    "country_name": "Germany",
+                    "year": 2019,
+                    "has_bsl4": False,
+                    "bsl4_area_m2": 0,
+                    "has_bsl3": True,
+                    "bsl3_area_m2": 500,
+                    "highest_containment": "BSL-3",
+                    "personnel_total": None,
+                    "agents_summary": None,
+                },
+                {
+                    "canonical_facility_id": "DEU_001",
+                    "facility_name": "Friedrich-Loeffler-Institut",
+                    "country_iso3": "DEU",
+                    "country_name": "Germany",
+                    "year": 2020,
+                    "has_bsl4": True,
+                    "bsl4_area_m2": 200,
+                    "has_bsl3": True,
+                    "bsl3_area_m2": 500,
+                    "highest_containment": "BSL-4",
+                    "personnel_total": None,
+                    "agents_summary": None,
+                },
+            ],
+        )
         r = c.get("/api/changes/notable?min_years=3")
         assert r.status_code == 200
         body = r.json()
@@ -904,17 +1051,25 @@ class TestNotableChanges:
     def test_no_changes_with_high_min_years(self, client):
         """If min_years exceeds the record count, no changes should be returned."""
         c, pool = client
-        _setup_cursor(pool, fetchall=[
-            {
-                "canonical_facility_id": "GBR_001",
-                "facility_name": "Pirbright Institute",
-                "country_iso3": "GBR", "country_name": "United Kingdom",
-                "year": 2023, "has_bsl4": False, "bsl4_area_m2": 0,
-                "has_bsl3": True, "bsl3_area_m2": 300,
-                "highest_containment": "BSL-3",
-                "personnel_total": None, "agents_summary": None,
-            },
-        ])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "canonical_facility_id": "GBR_001",
+                    "facility_name": "Pirbright Institute",
+                    "country_iso3": "GBR",
+                    "country_name": "United Kingdom",
+                    "year": 2023,
+                    "has_bsl4": False,
+                    "bsl4_area_m2": 0,
+                    "has_bsl3": True,
+                    "bsl3_area_m2": 300,
+                    "highest_containment": "BSL-3",
+                    "personnel_total": None,
+                    "agents_summary": None,
+                },
+            ],
+        )
         r = c.get("/api/changes/notable?min_years=5")
         assert r.status_code == 200
         assert r.json() == []
@@ -929,15 +1084,16 @@ class TestNotableChanges:
 
 # ── /api/pathogens/frequency ────────────────────────────────────────────────
 
+
 class TestPathogenFrequency:
     def test_returns_sorted_pathogen_list(self, client):
         c, pool = client
         # The endpoint builds a dynamic query with one COUNT per pathogen term.
         # There are 20 terms, so we need c_0 through c_19 in the mock row.
         row = {f"c_{i}": 0 for i in range(20)}
-        row["c_0"] = 15   # Anthrax
-        row["c_4"] = 8    # Tularaemia
-        row["c_8"] = 42   # Influenza
+        row["c_0"] = 15  # Anthrax
+        row["c_4"] = 8  # Tularaemia
+        row["c_8"] = 42  # Influenza
         _setup_cursor(pool, fetchone=row)
         r = c.get("/api/pathogens/frequency")
         assert r.status_code == 200
@@ -962,19 +1118,25 @@ class TestPathogenFrequency:
 
 # ── /api/countries/transparency ─────────────────────────────────────────────
 
+
 class TestTransparency:
     def test_returns_scored_country_list(self, client):
         c, pool = client
-        _setup_cursor(pool, fetchall=[{
-            "country_iso3": "DEU",
-            "country_name": "Germany",
-            "submission_count": 12,
-            "first_year": 2012,
-            "latest_year": 2024,
-            "a1_rate": 0.917,
-            "regularity_score": 0.923,
-            "recency_score": 1.0,
-        }])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "country_iso3": "DEU",
+                    "country_name": "Germany",
+                    "submission_count": 12,
+                    "first_year": 2012,
+                    "latest_year": 2024,
+                    "a1_rate": 0.917,
+                    "regularity_score": 0.923,
+                    "recency_score": 1.0,
+                }
+            ],
+        )
         r = c.get("/api/countries/transparency")
         assert r.status_code == 200
         body = r.json()
@@ -990,16 +1152,21 @@ class TestTransparency:
     def test_lapsed_country_gets_low_recency(self, client):
         """A country whose latest submission was 8+ years ago gets a low recency score."""
         c, pool = client
-        _setup_cursor(pool, fetchall=[{
-            "country_iso3": "TLS",
-            "country_name": "Timor-Leste",
-            "submission_count": 2,
-            "first_year": 2013,
-            "latest_year": 2014,
-            "a1_rate": 0.5,
-            "regularity_score": 1.0,
-            "recency_score": 0.1,
-        }])
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "country_iso3": "TLS",
+                    "country_name": "Timor-Leste",
+                    "submission_count": 2,
+                    "first_year": 2013,
+                    "latest_year": 2014,
+                    "a1_rate": 0.5,
+                    "regularity_score": 1.0,
+                    "recency_score": 0.1,
+                }
+            ],
+        )
         r = c.get("/api/countries/transparency")
         assert r.status_code == 200
         body = r.json()
@@ -1013,3 +1180,202 @@ class TestTransparency:
         r = c.get("/api/countries/transparency")
         assert r.status_code == 200
         assert r.json() == []
+
+
+# ── /api/natural-query (AI search) ────────────────────────────────────────
+
+
+def _mock_claude_response(text: str):
+    """Build a mock Anthropic message whose content[0].text returns *text*."""
+    block = MagicMock()
+    block.text = text
+    msg = MagicMock()
+    msg.content = [block]
+    return msg
+
+
+class TestNaturalQuery:
+    """Tests for the POST /api/natural-query endpoint.
+
+    The Anthropic SDK is mocked — no real API calls are made.
+    """
+
+    def test_missing_api_key_returns_503(self, client):
+        """If ANTHROPIC_API_KEY is unset, the endpoint should refuse with 503."""
+        c, _ = client
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            r = c.post("/api/natural-query", json={"q": "BSL-4 labs in Germany"})
+        assert r.status_code == 503
+        assert "ANTHROPIC_API_KEY" in r.json()["detail"]
+
+    def test_successful_organism_query(self, client):
+        """A query mentioning organisms should return matching A1 facilities."""
+        c, pool = client
+        _setup_cursor(
+            pool,
+            fetchall=[
+                {
+                    "id": "DEU_001",
+                    "name": "Robert Koch Institut",
+                    "country_iso3": "DEU",
+                    "latest_containment": "BSL-3",
+                    "years_declared": [2024],
+                    "layer": "A1",
+                    "country_name": "Germany",
+                }
+            ],
+        )
+        filters = {
+            "organisms": ["influenza"],
+            "keywords": [],
+            "countries": [],
+            "bsl": [],
+            "rationale": "Searching for influenza research.",
+        }
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
+                r = c.post("/api/natural-query", json={"q": "influenza research"})
+        assert r.status_code == 200
+        body = r.json()
+        assert "facilities" in body
+        assert "filters" in body
+        assert body["facilities"][0]["id"] == "DEU_001"
+
+    def test_country_query_includes_vaccine_and_defence(self, client):
+        """When countries are in the filter, vaccine (G) and defence (A2) layers are appended."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        # Three fetchall calls: A1 facilities, vaccine facilities, defence facilities
+        cur.fetchall.side_effect = [
+            [
+                {
+                    "id": "DEU_001",
+                    "name": "RKI",
+                    "country_iso3": "DEU",
+                    "latest_containment": "BSL-3",
+                    "years_declared": [2024],
+                    "layer": "A1",
+                    "country_name": "Germany",
+                }
+            ],
+            [
+                {
+                    "id": "DEU_V001",
+                    "name": "PEI",
+                    "country_iso3": "DEU",
+                    "latest_containment": None,
+                    "years_declared": [2024],
+                    "layer": "G",
+                    "country_name": "Germany",
+                }
+            ],
+            [
+                {
+                    "id": "DEU_D001",
+                    "name": "WIS",
+                    "country_iso3": "DEU",
+                    "latest_containment": None,
+                    "years_declared": [2024],
+                    "layer": "A2",
+                    "country_name": "Germany",
+                }
+            ],
+        ]
+        filters = {
+            "organisms": [],
+            "keywords": [],
+            "countries": ["DEU"],
+            "bsl": [],
+            "rationale": "Facilities in Germany.",
+        }
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
+                r = c.post("/api/natural-query", json={"q": "all facilities in Germany"})
+        assert r.status_code == 200
+        layers = {f["layer"] for f in r.json()["facilities"]}
+        assert layers == {"A1", "G", "A2"}
+
+    def test_empty_filters_returns_empty_facilities(self, client):
+        """When Claude returns no usable filters, facilities list should be empty."""
+        c, pool = client
+        filters = {
+            "organisms": [],
+            "keywords": [],
+            "countries": [],
+            "bsl": [],
+            "rationale": "No actionable filters found.",
+        }
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
+                r = c.post("/api/natural-query", json={"q": "hello world"})
+        assert r.status_code == 200
+        assert r.json()["facilities"] == []
+
+    def test_claude_api_failure_returns_500(self, client):
+        """If the Anthropic API raises an exception, the endpoint returns 500."""
+        c, _ = client
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.side_effect = RuntimeError("API down")
+                r = c.post("/api/natural-query", json={"q": "anthrax labs"})
+        assert r.status_code == 500
+        assert "failed" in r.json()["detail"].lower()
+
+    def test_claude_returns_invalid_json_returns_500(self, client):
+        """If Claude returns unparseable text, json.loads raises and we get 500."""
+        c, _ = client
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response("This is not JSON at all.")
+                r = c.post("/api/natural-query", json={"q": "BSL-4 labs"})
+        assert r.status_code == 500
+
+    def test_code_fence_stripping(self, client):
+        """Claude sometimes wraps JSON in ```json ... ``` — endpoint should strip it."""
+        c, pool = client
+        _setup_cursor(pool, fetchall=[])
+        filters = {"organisms": ["ebola"], "keywords": [], "countries": [], "bsl": [], "rationale": "Ebola search."}
+        fenced = "```json\n" + json.dumps(filters) + "\n```"
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(fenced)
+                r = c.post("/api/natural-query", json={"q": "ebola research"})
+        assert r.status_code == 200
+        assert r.json()["filters"]["organisms"] == ["ebola"]
+
+    def test_query_too_long_returns_422(self, client):
+        """NaturalQueryRequest.q has max_length=400; exceeding it should return 422."""
+        c, _ = client
+        r = c.post("/api/natural-query", json={"q": "x" * 401})
+        assert r.status_code == 422
+
+    def test_rationale_clamped_to_300_chars(self, client):
+        """Rationale from Claude is truncated to 300 chars to prevent response smuggling."""
+        c, pool = client
+        _setup_cursor(pool, fetchall=[])
+        long_rationale = "A" * 500
+        filters = {"organisms": ["anthrax"], "keywords": [], "countries": [], "bsl": [], "rationale": long_rationale}
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
+                r = c.post("/api/natural-query", json={"q": "anthrax research"})
+        assert r.status_code == 200
+        assert len(r.json()["rationale"]) == 300
+
+    def test_clean_list_caps_items_and_length(self, client):
+        """_clean_list caps at 10 items and 100 chars per term — verified via round-trip."""
+        c, pool = client
+        _setup_cursor(pool, fetchall=[])
+        # 15 organisms, one with 150 chars — only 10 should survive, each ≤100 chars
+        organisms = [f"org_{i}" for i in range(15)]
+        organisms[0] = "X" * 150
+        filters = {"organisms": organisms, "keywords": [], "countries": [], "bsl": [], "rationale": "Test."}
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
+                r = c.post("/api/natural-query", json={"q": "many organisms"})
+        assert r.status_code == 200

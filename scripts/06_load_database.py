@@ -607,7 +607,9 @@ def main() -> None:
                     n = fn(cur, catalogue) if needs_cat else fn(cur)
                     log.info("  %-28s %d rows", name, n)
 
-                # Restore geocoded geometry for facility_years
+                # Restore geocoded geometry for facility_years.
+                # After restoration, verify how many rows actually matched to
+                # detect silent losses from entity ID changes between runs.
                 if fy_geom:
                     psycopg2.extras.execute_batch(cur, """
                         UPDATE facility_years
@@ -620,9 +622,14 @@ def main() -> None:
                         (row[2], row[3], row[4], row[0], row[1])
                         for row in fy_geom
                     ])
-                    log.info("  Restored %d facility_years geom", len(fy_geom))
+                    cur.execute("SELECT count(*) FROM facility_years WHERE geom IS NOT NULL")
+                    actual = cur.fetchone()[0]
+                    log.info("  Restored facility_years geom: %d/%d matched", actual, len(fy_geom))
+                    if actual < len(fy_geom):
+                        log.warning("  ⚠ %d facility_years geom rows not restored "
+                                    "(entity IDs may have changed)", len(fy_geom) - actual)
 
-                # Restore geocoded geometry for vaccine_facility_years
+                # Restore geocoded geometry for vaccine_facility_years.
                 # Key on (document_id, facility_name) — canonical_vaccine_facility_id
                 # may be NULL if geocoding ran before entity resolution.
                 if vfy_geom:
@@ -637,7 +644,12 @@ def main() -> None:
                         (row[2], row[3], row[4], row[0], row[1])
                         for row in vfy_geom
                     ])
-                    log.info("  Restored %d vaccine_facility_years geom", len(vfy_geom))
+                    cur.execute("SELECT count(*) FROM vaccine_facility_years WHERE geom IS NOT NULL")
+                    actual = cur.fetchone()[0]
+                    log.info("  Restored vaccine_facility_years geom: %d/%d matched", actual, len(vfy_geom))
+                    if actual < len(vfy_geom):
+                        log.warning("  ⚠ %d vaccine_facility_years geom rows not restored "
+                                    "(facility names may have changed)", len(vfy_geom) - actual)
 
                 # Restore geocoded geometry for defence_facilities
                 if df_geom:
@@ -652,7 +664,12 @@ def main() -> None:
                         (row[2], row[3], row[4], row[0], row[1])
                         for row in df_geom
                     ])
-                    log.info("  Restored %d defence_facilities geom", len(df_geom))
+                    cur.execute("SELECT count(*) FROM defence_facilities WHERE geom IS NOT NULL")
+                    actual = cur.fetchone()[0]
+                    log.info("  Restored defence_facilities geom: %d/%d matched", actual, len(df_geom))
+                    if actual < len(df_geom):
+                        log.warning("  ⚠ %d defence_facilities geom rows not restored "
+                                    "(facility names may have changed)", len(df_geom) - actual)
 
     # FEATURE 11: Rebuild defence_entities canonical registry after defence_facilities load
     n_de = build_defence_entities(conn)

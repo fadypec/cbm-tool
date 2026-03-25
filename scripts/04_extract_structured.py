@@ -1135,7 +1135,14 @@ def process_entry(
         return {"id": entry_id, "status": "no_form_a1"}
 
     if out_path.exists():
-        return {"id": entry_id, "status": "skipped"}
+        # Validate the existing output is parseable JSON — a crash mid-write
+        # could leave a truncated file that silently suppresses re-extraction.
+        try:
+            json.loads(out_path.read_text(encoding="utf-8"))
+            return {"id": entry_id, "status": "skipped"}
+        except (json.JSONDecodeError, ValueError):
+            log.warning("[%s] Corrupt output JSON — deleting and re-extracting", entry_id)
+            out_path.unlink()
 
     text   = form_path.read_text(encoding="utf-8")
     chunks = split_into_chunks(text)
@@ -1245,7 +1252,12 @@ def process_entry_g(
         return {"id": entry_id, "status": "no_form_g"}
 
     if out_path.exists():
-        return {"id": entry_id, "status": "skipped"}
+        try:
+            json.loads(out_path.read_text(encoding="utf-8"))
+            return {"id": entry_id, "status": "skipped"}
+        except (json.JSONDecodeError, ValueError):
+            log.warning("[%s] Corrupt form_g output JSON — re-extracting", entry_id)
+            out_path.unlink()
 
     text = form_path.read_text(encoding="utf-8")
 
@@ -1383,7 +1395,12 @@ def process_entry_a2(
         return {"id": entry_id, "status": "no_form_a2"}
 
     if out_path.exists():
-        return {"id": entry_id, "status": "skipped"}
+        try:
+            json.loads(out_path.read_text(encoding="utf-8"))
+            return {"id": entry_id, "status": "skipped"}
+        except (json.JSONDecodeError, ValueError):
+            log.warning("[%s] Corrupt form_a2 output JSON — re-extracting", entry_id)
+            out_path.unlink()
 
     text   = form_path.read_text(encoding="utf-8")
     chunks = split_into_chunks_a2(text)
@@ -1492,7 +1509,12 @@ def process_entry_f(
         return {"id": entry_id, "status": "no_form_f"}
 
     if out_path.exists():
-        return {"id": entry_id, "status": "skipped"}
+        try:
+            json.loads(out_path.read_text(encoding="utf-8"))
+            return {"id": entry_id, "status": "skipped"}
+        except (json.JSONDecodeError, ValueError):
+            log.warning("[%s] Corrupt form_f output JSON — re-extracting", entry_id)
+            out_path.unlink()
 
     text = form_path.read_text(encoding="utf-8").strip()
     if not text:
@@ -1579,7 +1601,12 @@ def process_entry_e(
     out_path  = STRUCTURED_DIR / f"{entry_id}_form_e.json"
 
     if out_path.exists():
-        return {"id": entry_id, "status": "skipped"}
+        try:
+            json.loads(out_path.read_text(encoding="utf-8"))
+            return {"id": entry_id, "status": "skipped"}
+        except (json.JSONDecodeError, ValueError):
+            log.warning("[%s] Corrupt form_e output JSON — re-extracting", entry_id)
+            out_path.unlink()
 
     if not form_path.exists():
         return {"id": entry_id, "status": "no_form_e"}
@@ -1708,7 +1735,12 @@ def process_entry_b(
         return {"id": entry_id, "status": "no_form_b"}
 
     if out_path.exists():
-        return {"id": entry_id, "status": "skipped"}
+        try:
+            json.loads(out_path.read_text(encoding="utf-8"))
+            return {"id": entry_id, "status": "skipped"}
+        except (json.JSONDecodeError, ValueError):
+            log.warning("[%s] Corrupt form_b output JSON — re-extracting", entry_id)
+            out_path.unlink()
 
     text = form_path.read_text(encoding="utf-8").strip()
     if not text:

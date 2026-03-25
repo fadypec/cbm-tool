@@ -495,9 +495,11 @@ def process_entry(
         log.warning("[%s] No extracted text file found — skipping", entry_id)
         return {"id": entry_id, "status": "missing_txt"}
 
-    # Skip if already segmented (incremental mode)
-    seg_dir = SEGMENTED_DIR / entry_id
-    if not force and not dry_run and seg_dir.exists() and any(seg_dir.iterdir()):
+    # Skip if already segmented (incremental mode).
+    # Require manifest.json to exist — its absence indicates a partial/interrupted run.
+    seg_dir  = SEGMENTED_DIR / entry_id
+    manifest = seg_dir / "manifest.json"
+    if not force and not dry_run and manifest.exists():
         return {"id": entry_id, "status": "skipped"}
 
     text = txt_path.read_text(encoding="utf-8")

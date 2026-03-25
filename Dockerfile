@@ -14,4 +14,6 @@ EXPOSE 8000
 RUN adduser --disabled-password --gecos '' appuser
 USER appuser
 
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# exec replaces the shell with uvicorn so it runs as PID 1 and receives
+# SIGTERM directly from Docker/Railway for graceful shutdown.
+CMD ["sh", "-c", "exec uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

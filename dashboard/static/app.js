@@ -61,6 +61,10 @@ let filterCollapsed = false;
 const _searchMode = 'ai';
 let _countriesData  = [];   // full /api/countries response, for global table
 let _playInterval   = null; // year animation interval
+// Reduced-motion preference — checked once, updated on change
+const _prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+// Track whether timeline hover listeners have been attached for the current modal render
+let _timelineHoverInitialised = false;
 let _hashTimer      = null; // debounce for history.replaceState
 let _tableSort      = { col: 'submission_count', dir: 'desc' };
 
@@ -78,6 +82,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     initMap();
     initClusters();
     entityModal = new bootstrap.Modal(document.getElementById('entity-modal'));
+
+    // Clean up SVG listeners when entity modal closes to prevent accumulation
+    document.getElementById('entity-modal').addEventListener('hidden.bs.modal', () => {
+        _timelineHoverInitialised = false;
+    });
+
     initSearch();
     initStaticListeners();
     initEventDelegation();
@@ -653,6 +663,13 @@ function toggleYearPlay() {
 }
 
 function startYearPlay() {
+    // Respect prefers-reduced-motion: skip animation entirely, jump to last year
+    if (_prefersReducedMotion.matches) {
+        const years = getDataYears();
+        if (years.length) _setPlayYear(years[years.length - 1]);
+        return;
+    }
+
     // Ensure specific-year mode is active
     const allYears = document.getElementById('all-years');
     if (allYears && allYears.checked) {
@@ -1577,6 +1594,7 @@ async function showEntityModal(entityId) {
 }
 
 function renderEntityModal(data) {
+    _timelineHoverInitialised = false; // reset for fresh SVG listeners
     document.getElementById('modal-title').textContent = data.canonical_name || '[Unnamed facility]';
     const yr = data.year_records || [];
 
@@ -3119,12 +3137,17 @@ function renderTimelineTab(yearRecords) {
 }
 
 // Dot hover handler (called from SVG mouseover on circles)
-// Attaches hover listeners to timeline SVG dots and hides tooltip on mouse leave
+// Attaches hover listeners to timeline SVG dots and hides tooltip on mouse leave.
+// Guarded by _timelineHoverInitialised to prevent listener accumulation when
+// the user switches away from and back to the Timeline tab within the same modal.
 function initTimelineHover(container) {
+    if (_timelineHoverInitialised) return;
     const svg = container.querySelector('svg.timeline-svg');
     if (!svg) return;
     const tip = document.getElementById('tl-tooltip');
     if (!tip) return;
+    _timelineHoverInitialised = true;
+
     svg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
     const recs = JSON.parse(svg.dataset.recs || '{}');
 

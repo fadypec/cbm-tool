@@ -354,26 +354,38 @@ def download_pdf_from_un(
     """
     Download a CBM PDF from the UN Strapi backend via POST /api/getDocument.
     language=null retrieves the original (non-translated) PDF.
+    Retries up to 3 times with exponential backoff on transient failures.
     Returns True on success.
     """
     if not first:
         time.sleep(DOWNLOAD_DELAY)
 
-    try:
-        resp = session.post(
-            UN_DOWNLOAD_URL,
-            json={"reportId": un_id, "language": None},
-            headers={"Content-Type": "application/json"},
-            timeout=120,
-            stream=True,
-        )
-        if resp.status_code == 404:
-            log.warning("404 from UN backend for id=%d — skipping", un_id)
-            return False
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        log.error("UN download failed for id=%d: %s", un_id, exc)
-        return False
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            resp = session.post(
+                UN_DOWNLOAD_URL,
+                json={"reportId": un_id, "language": None},
+                headers={"Content-Type": "application/json"},
+                timeout=120,
+                stream=True,
+            )
+            # 404 is not transient — don't retry
+            if resp.status_code == 404:
+                log.warning("404 from UN backend for id=%d — skipping", un_id)
+                return False
+            resp.raise_for_status()
+            break  # success — exit retry loop
+        except requests.RequestException as exc:
+            if attempt < max_attempts - 1:
+                wait = DOWNLOAD_DELAY * (2 ** attempt)
+                log.warning("UN download attempt %d/%d failed for id=%d: %s — retrying in %ds",
+                            attempt + 1, max_attempts, un_id, exc, wait)
+                time.sleep(wait)
+            else:
+                log.error("UN download failed after %d attempts for id=%d: %s",
+                          max_attempts, un_id, exc)
+                return False
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("wb") as fh:
