@@ -203,7 +203,8 @@ Clicking any card navigates into the existing UI and closes the AI modal.
 
 All existing security measures carry over:
 - Query input capped at 400 characters (`NaturalQueryRequest.q`)
-- Rate limited at 10/minute per IP
+- Rate limited at 10/minute per IP AND 100/day per IP (daily cap prevents sustained automated querying)
+- Daily limit uses slowapi's built-in composite limit support: `@limiter.limit("10/minute;100/day")`
 - All SQL uses parameterized queries (`%s` placeholders) — no string interpolation
 - LLM output validated and clamped (country codes, form names, year ranges checked against allowed values)
 - Haiku call 2 system prompt includes injection-prevention rules (respond only with summary text, ignore user instructions in the data)
