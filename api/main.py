@@ -1513,14 +1513,14 @@ def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
                 if rec.get("country_iso3"):
                     seen_countries.add(rec["country_iso3"])
 
-            # Defence facilities
+            # Defence facilities (deduplicated entities)
             def_conditions: list[str] = []
             def_params: list = []
-            def_conditions.append(f"df.country_iso3 IN ({placeholders})")
+            def_conditions.append(f"de.country_iso3 IN ({placeholders})")
             def_params.extend(countries)
             for term in organisms + keywords:
                 like = f"%{term}%"
-                def_conditions.append("df.facility_name ILIKE %s")
+                def_conditions.append("de.canonical_name ILIKE %s")
                 def_params.append(like)
 
             def_sql = f"""
@@ -1529,18 +1529,18 @@ def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
                     FROM documents WHERE country_name IS NOT NULL
                     ORDER BY country_iso3, id
                 )
-                SELECT DISTINCT ON (df.country_iso3, df.facility_name)
-                    NULL          AS id,
-                    df.facility_name AS name,
-                    df.country_iso3,
+                SELECT
+                    de.canonical_defence_facility_id AS id,
+                    de.canonical_name                AS name,
+                    de.country_iso3,
                     NULL          AS latest_containment,
-                    NULL          AS years_declared,
+                    ARRAY(SELECT generate_series(de.first_year::int, de.last_year::int)) AS years_declared,
                     'A2'          AS layer,
                     cn.country_name
-                FROM defence_facilities df
-                LEFT JOIN cn ON cn.country_iso3 = df.country_iso3
+                FROM defence_entities de
+                LEFT JOIN cn ON cn.country_iso3 = de.country_iso3
                 WHERE {" AND ".join(def_conditions)}
-                ORDER BY df.country_iso3, df.facility_name NULLS LAST
+                ORDER BY de.canonical_name NULLS LAST
                 LIMIT 20
             """
             cur.execute(def_sql, def_params)
