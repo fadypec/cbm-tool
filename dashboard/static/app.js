@@ -1827,7 +1827,7 @@ function renderGlobalTable(rows, sortCol, sortDir) {
 
     sorted.forEach(c => {
         const rate = c.a1_rate != null
-            ? `<span class="gt-rate" style="background:${choroColor(c.a1_rate)}">${Math.round(c.a1_rate * 100)}%</span>`
+            ? `<span class="gt-rate" style="background:${choroColor(c.a1_rate)};${c.a1_rate <= 0.2 ? 'color:#555' : ''}">${Math.round(c.a1_rate * 100)}%</span>`
             : `<span class="gt-rate gt-rate-none">—</span>`;
         const bsl4 = c.bsl4_count
             ? `<strong style="color:#c0392b">${c.bsl4_count}</strong>`
