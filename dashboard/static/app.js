@@ -1208,7 +1208,7 @@ function renderComplianceGrid(compliance) {
     const FORMS = ['A1', 'A2', 'B', 'C', 'E', 'F', 'G'];
 
     if (!compliance || compliance.length === 0) {
-        el.innerHTML = '<div style="color:#8090b8;font-size:12px">No compliance data</div>';
+        el.innerHTML = '<div style="color:#8090b8;font-size:12px">No submission data</div>';
         return;
     }
 
@@ -1225,7 +1225,7 @@ function renderComplianceGrid(compliance) {
         s === 'limited'            ? 'td-ltd' : 'td-abs';
 
     let html =
-        `<table role="grid" aria-label="Compliance grid: form submission status by year">` +
+        `<table role="grid" aria-label="Submission grid: form submission status by year">` +
         `<colgroup><col class="yr-col">${FORMS.map(() => `<col class="frm-col">`).join('')}</colgroup>` +
         `<thead><tr><th class="yr-col">Year</th>${FORMS.map(f => `<th>${f}</th>`).join('')}</tr></thead>` +
         `<tbody>`;
@@ -1779,7 +1779,7 @@ function copyPermalink() {
     }, 120);
 }
 
-// ── Global compliance table ─────────────────────────────────────────────────
+// ── Global submission table ─────────────────────────────────────────────────
 
 function showGlobalTable() {
     const rows = _countriesData.map(c => {

@@ -369,7 +369,7 @@ def api_countries():
 # ── /api/country/{iso3} ───────────────────────────────────────────────────────
 
 
-@app.get("/api/country/{iso3}", summary="Compliance history and facility list for one country")
+@app.get("/api/country/{iso3}", summary="Submission history and facility list for one country")
 def api_country(iso3: str):
     iso3 = iso3.upper()
     with cursor() as cur:
@@ -824,7 +824,7 @@ def api_map_vaccines(request: Request):
 # ── /api/map/compliance ───────────────────────────────────────────────────────
 
 
-@app.get("/api/map/compliance", summary="Per-country Form A1 submission rates (for choropleth)")
+@app.get("/api/map/compliance", summary="Per-country Form A1 submission rates for choropleth")
 def api_map_compliance():
     with cursor() as cur:
         cur.execute("""
@@ -1000,7 +1000,7 @@ def api_entity(entity_id: str):
 VALID_FORMS = {"A1", "A2", "B", "C", "E", "F", "G"}
 
 
-@app.get("/api/map/compliance/{form}", summary="Per-country compliance rate for a given form")
+@app.get("/api/map/compliance/{form}", summary="Per-country submission rate for a given form")
 def api_map_compliance_form(form: str):
     """Returns per-country submission rate for any CBM form (A1, A2, B, C, E, F, G).
 
