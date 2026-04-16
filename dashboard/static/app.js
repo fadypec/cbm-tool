@@ -1103,9 +1103,10 @@ function renderCountryList(countries) {
 }
 
 // Returns an HTML badge for a 0–100 transparency score
+const _TRANSP_TIP = 'Transparency index (0\u2013100): weighted composite of regularity (40% \u2014 how consistently this country submits CBMs each year), substantive A1 rate (40% \u2014 share of submissions with detailed facility declarations), and recency (20% \u2014 whether the country submitted in the last 3 years).';
 function transparencyBadge(score) {
     const cls  = score >= 65 ? 'transp-high' : score >= 35 ? 'transp-medium' : 'transp-low';
-    return `<span class="transp-badge ${cls}" title="Transparency index: ${score}/100">${Math.round(score)}</span>`;
+    return `<span class="transp-badge ${cls}" title="Transparency index: ${score}/100">${Math.round(score)}</span><span class="transp-info" title="${_TRANSP_TIP}" style="cursor:help;opacity:0.6;font-size:0.85em;margin-left:2px">&#9432;</span>`;
 }
 
 // ── Country detail ─────────────────────────────────────────────────────────
