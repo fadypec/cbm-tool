@@ -348,13 +348,13 @@ def api_countries():
             SELECT
                 d.country_iso3,
                 MAX(d.country_name)                                                          AS country_name,
-                COUNT(DISTINCT d.id)                                                         AS submission_count,
+                COUNT(DISTINCT d.year)                                                       AS submission_count,
                 MAX(d.year)                                                                  AS latest_year,
                 COUNT(DISTINCT fy.canonical_facility_id)                                     AS facility_count,
                 COUNT(DISTINCT CASE WHEN fy.has_bsl4 THEN fy.canonical_facility_id END)     AS bsl4_count,
                 ROUND(
-                    COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.id END)::numeric
-                    / NULLIF(COUNT(DISTINCT d.id), 0), 3
+                    COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.year END)::numeric
+                    / NULLIF(COUNT(DISTINCT d.year), 0), 3
                 )                                                                            AS a1_rate
             FROM documents d
             LEFT JOIN facility_years fy  ON fy.document_id = d.id
@@ -831,10 +831,10 @@ def api_map_compliance():
             SELECT
                 d.country_iso3,
                 MAX(d.country_name)  AS country_name,
-                COUNT(DISTINCT d.id) AS submission_count,
+                COUNT(DISTINCT d.year) AS submission_count,
                 ROUND(
-                    COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.id END)::numeric
-                    / NULLIF(COUNT(DISTINCT d.id), 0), 3
+                    COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.year END)::numeric
+                    / NULLIF(COUNT(DISTINCT d.year), 0), 3
                 )                    AS a1_rate
             FROM documents d
             LEFT JOIN form_compliance fc ON fc.document_id = d.id AND fc.form = 'A1'
@@ -1017,10 +1017,10 @@ def api_map_compliance_form(form: str):
             SELECT
                 d.country_iso3,
                 MAX(d.country_name)  AS country_name,
-                COUNT(DISTINCT d.id) AS submission_count,
+                COUNT(DISTINCT d.year) AS submission_count,
                 ROUND(
-                    COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.id END)::numeric
-                    / NULLIF(COUNT(DISTINCT d.id), 0), 3
+                    COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.year END)::numeric
+                    / NULLIF(COUNT(DISTINCT d.year), 0), 3
                 )                    AS rate
             FROM documents d
             LEFT JOIN form_compliance fc ON fc.document_id = d.id AND fc.form = %s
