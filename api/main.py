@@ -1375,9 +1375,170 @@ def _nq_country_names(cur, iso3_list):
 # Each returns {answer, data, entities, facilities, use_compare_mode}.
 # Real implementations will be added in subsequent tasks.
 
-def _nq_facility_search(*, countries, forms, year_min, year_max, organisms, keywords, bsl, legislation_category, user_query, api_key):
-    """Stub: facility search handler."""
-    return {"answer": "Facility search is not yet implemented.", "data": [], "entities": [], "facilities": [], "use_compare_mode": False}
+def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
+    """Facility search handler: queries A1, G, and A2 tables and builds entity cards."""
+    # No conditions → empty results immediately
+    if not organisms and not keywords and not countries and not bsl:
+        return {"answer": "", "data": [], "entities": [], "facilities": [], "use_compare_mode": False}
+
+    # Build WHERE conditions and params for the main A1 facilities query
+    a1_conditions: list[str] = []
+    a1_params: list = []
+
+    if countries:
+        placeholders = ",".join(["%s"] * len(countries))
+        a1_conditions.append(f"f.country_iso3 IN ({placeholders})")
+        a1_params.extend(countries)
+
+    for term in organisms + keywords:
+        like = f"%{term}%"
+        a1_conditions.append(
+            "(f.canonical_name ILIKE %s OR EXISTS ("
+            "SELECT 1 FROM facility_years fy2 "
+            "WHERE fy2.canonical_facility_id = f.canonical_facility_id "
+            "AND fy2.agents_summary ILIKE %s))"
+        )
+        a1_params.extend([like, like])
+
+    for level in bsl:
+        like = f"%{level}%"
+        a1_conditions.append(
+            "EXISTS (SELECT 1 FROM facility_years fy3 "
+            "WHERE fy3.canonical_facility_id = f.canonical_facility_id "
+            "AND fy3.highest_containment ILIKE %s)"
+        )
+        a1_params.append(like)
+
+    where_a1 = ("WHERE " + " AND ".join(a1_conditions)) if a1_conditions else ""
+
+    a1_sql = f"""
+        WITH cn AS (
+            SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+            FROM documents WHERE country_name IS NOT NULL
+            ORDER BY country_iso3, id
+        )
+        SELECT
+            f.canonical_facility_id AS id,
+            f.canonical_name        AS name,
+            f.country_iso3,
+            f.latest_containment,
+            f.years_declared,
+            'A1'                    AS layer,
+            cn.country_name
+        FROM facilities f
+        LEFT JOIN cn ON cn.country_iso3 = f.country_iso3
+        {where_a1}
+        ORDER BY f.canonical_name NULLS LAST
+        LIMIT 50
+    """
+
+    facilities: list[dict] = []
+    seen_countries: set[str] = set()
+
+    with cursor() as cur:
+        cur.execute(a1_sql, a1_params)
+        rows = cur.fetchall()
+        for r in rows:
+            rec = dict(r)
+            facilities.append(rec)
+            if rec.get("country_iso3"):
+                seen_countries.add(rec["country_iso3"])
+
+        # For country-scoped queries, also query vaccine and defence tables
+        if countries:
+            # Vaccine facilities
+            vac_conditions: list[str] = []
+            vac_params: list = []
+            placeholders = ",".join(["%s"] * len(countries))
+            vac_conditions.append(f"vf.country_iso3 IN ({placeholders})")
+            vac_params.extend(countries)
+            for term in organisms + keywords:
+                like = f"%{term}%"
+                vac_conditions.append("vf.canonical_name ILIKE %s")
+                vac_params.append(like)
+
+            vac_sql = f"""
+                WITH cn AS (
+                    SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+                    FROM documents WHERE country_name IS NOT NULL
+                    ORDER BY country_iso3, id
+                )
+                SELECT
+                    vf.id::text   AS id,
+                    vf.canonical_name AS name,
+                    vf.country_iso3,
+                    NULL          AS latest_containment,
+                    ARRAY(SELECT generate_series(vf.first_year::int, vf.last_year::int)) AS years_declared,
+                    'G'           AS layer,
+                    cn.country_name
+                FROM vaccine_facilities vf
+                LEFT JOIN cn ON cn.country_iso3 = vf.country_iso3
+                WHERE {" AND ".join(vac_conditions)}
+                ORDER BY vf.canonical_name NULLS LAST
+                LIMIT 20
+            """
+            cur.execute(vac_sql, vac_params)
+            for r in cur.fetchall():
+                rec = dict(r)
+                facilities.append(rec)
+                if rec.get("country_iso3"):
+                    seen_countries.add(rec["country_iso3"])
+
+            # Defence facilities
+            def_conditions: list[str] = []
+            def_params: list = []
+            def_conditions.append(f"df.country_iso3 IN ({placeholders})")
+            def_params.extend(countries)
+            for term in organisms + keywords:
+                like = f"%{term}%"
+                def_conditions.append("df.facility_name ILIKE %s")
+                def_params.append(like)
+
+            def_sql = f"""
+                WITH cn AS (
+                    SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+                    FROM documents WHERE country_name IS NOT NULL
+                    ORDER BY country_iso3, id
+                )
+                SELECT DISTINCT ON (df.country_iso3, df.facility_name)
+                    NULL          AS id,
+                    df.facility_name AS name,
+                    df.country_iso3,
+                    NULL          AS latest_containment,
+                    NULL          AS years_declared,
+                    'A2'          AS layer,
+                    cn.country_name
+                FROM defence_facilities df
+                LEFT JOIN cn ON cn.country_iso3 = df.country_iso3
+                WHERE {" AND ".join(def_conditions)}
+                ORDER BY df.country_iso3, df.facility_name NULLS LAST
+                LIMIT 20
+            """
+            cur.execute(def_sql, def_params)
+            for r in cur.fetchall():
+                rec = dict(r)
+                facilities.append(rec)
+                if rec.get("country_iso3"):
+                    seen_countries.add(rec["country_iso3"])
+
+        # Build country entity cards from unique countries in results
+        entities: list[dict] = []
+        if seen_countries:
+            country_names = _nq_country_names(cur, list(seen_countries))
+            for iso3 in sorted(seen_countries):
+                entities.append({
+                    "type": "country",
+                    "iso3": iso3,
+                    "name": country_names.get(iso3, iso3),
+                })
+
+    return {
+        "answer": "",
+        "data": [],
+        "entities": entities,
+        "facilities": facilities,
+        "use_compare_mode": False,
+    }
 
 
 def _nq_submission_history(*, countries, forms, year_min, year_max, organisms, keywords, bsl, legislation_category, user_query, api_key):

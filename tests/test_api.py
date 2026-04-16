@@ -1426,6 +1426,33 @@ class TestNaturalQueryExpanded:
         assert body["query_type"] == "comparative"
         assert body["use_compare_mode"] is True
 
+    def test_facility_search_returns_country_entities(self, client):
+        """facility_search with country filter should include country entity cards."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        cur.fetchall.side_effect = [
+            [{"id": "DEU_001", "name": "RKI", "country_iso3": "DEU",
+              "latest_containment": "BSL-3", "years_declared": [2024],
+              "layer": "A1", "country_name": "Germany"}],
+            [],  # vaccine
+            [],  # defence
+            [{"country_iso3": "DEU", "country_name": "Germany"}],  # _nq_country_names
+        ]
+        classification = {
+            "query_type": "facility_search",
+            "countries": ["DEU"], "forms": [], "year_min": None, "year_max": None,
+            "organisms": [], "keywords": [], "bsl": [],
+            "legislation_category": None, "rationale": "Facilities in Germany."
+        }
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "facilities in Germany"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "facility_search"
+        assert any(e["type"] == "country" and e["iso3"] == "DEU" for e in body["entities"])
+
     def test_country_code_validation(self, client):
         """Invalid country codes should be filtered out."""
         c, pool = client
