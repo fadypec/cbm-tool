@@ -301,6 +301,28 @@
                     <li><span style="display:inline-block;width:10px;height:10px;background:#1c1e2e;border:1px solid #3a3c50;border-radius:2px;vertical-align:middle;margin-right:4px"></span><strong>Dark</strong> — form absent from that submission</li>
                 </ul>
 
+                <h6 class="about-heading">Submission counts</h6>
+                <p>The <strong>"Submissions"</strong> column in the All Countries table and the comparison view counts
+                the number of <strong>distinct years</strong> in which a country filed at least one CBM document.
+                Countries that submit in multiple languages (e.g. Canada submits in both English and French)
+                are counted once per year, not once per document.</p>
+                <p>The UN portal holds public CBM records from 1988 onwards, but coverage varies: most countries'
+                earliest available submissions date from 2011 (when the revised template was adopted).
+                Historical records before 2011 are available for some countries.</p>
+
+                <h6 class="about-heading">Transparency index</h6>
+                <p>The transparency score (0–100) shown per country is a weighted composite of three factors:</p>
+                <ul>
+                    <li><strong>Regularity (40%)</strong> — ratio of years with submissions to total years since first submission.
+                    A country that has submitted every year since its first CBM scores 1.0; one that skips years scores lower.</li>
+                    <li><strong>Substantive A1 rate (40%)</strong> — share of submissions that contain substantive Form A1
+                    research facility declarations (as opposed to "nothing to declare" or absent).</li>
+                    <li><strong>Recency (20%)</strong> — 1.0 if the country submitted within the last 3 years, 0.5 if 4–6 years ago,
+                    0.1 otherwise.</li>
+                </ul>
+                <p>This distinguishes procedural participation (submitting "nothing to declare" every year) from
+                substantive transparency (detailed facility declarations with consistent reporting).</p>
+
                 <h6 class="about-heading">Data extraction</h6>
                 <p>All structured information (facility names, locations, containment levels, organisational details)
                 was extracted from PDF documents by a <strong>large language model (Anthropic Claude Sonnet)</strong>.
