@@ -2448,17 +2448,18 @@ function _renderFacilityList(facilities) {
 function _renderSubmissionTable(rows) {
     const years = [...new Set(rows.map(r => r.year))].sort();
     const forms = [...new Set(rows.map(r => r.form))].sort();
-    let html = '<table class="nq-data-table"><thead><tr><th>Year</th>';
-    for (const f of forms) html += `<th>Form ${esc(f)}</th>`;
+    const _statusTip = s => s === 'nothing_to_declare' ? 'Nothing to declare' : s === 'substantive' ? 'Substantive' : s === 'absent' ? 'Absent' : s;
+    let html = '<table class="nq-data-table nq-dot-grid"><thead><tr><th>Year</th>';
+    for (const f of forms) html += `<th>${esc(f)}</th>`;
     html += '</tr></thead><tbody>';
     for (const y of years) {
         html += `<tr><td>${y}</td>`;
         for (const f of forms) {
             const match = rows.find(r => r.year === y && r.form === f);
             if (match) {
-                html += `<td><span class="nq-status-dot ${match.status}"></span>${esc(match.status)}</td>`;
+                html += `<td title="${_statusTip(match.status)}"><span class="nq-status-dot ${match.status}"></span></td>`;
             } else {
-                html += '<td>\u2014</td>';
+                html += '<td></td>';
             }
         }
         html += '</tr>';
