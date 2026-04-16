@@ -1929,7 +1929,7 @@ function renderPathogenChart(data, container) {
         `<p class="pathogen-chart-header">Number of unique declared research facilities mentioning each organism. Click any row to filter the map.</p>` +
         data.map(d => {
             const pct = (d.count / maxCount * 100).toFixed(1);
-            return `<div class="pathogen-row" data-action="apply-organism-filter" data-term="${esc(d.term)}"
+            return `<div class="pathogen-row" data-action="apply-organism-filter" data-term="${esc(d.term)}">
                 <span class="pathogen-label">${esc(d.label)}</span>
                 <div class="pathogen-bar-wrap"><div class="pathogen-bar" style="width:${pct}%"></div></div>
                 <span class="pathogen-count">${d.count}</span>
