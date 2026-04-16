@@ -2412,7 +2412,6 @@ function showAIQuery(initialQuery = '') {
             inp.value = initialQuery;
             // Clear any stale results from a previous query
             document.getElementById('ai-query-results').innerHTML  = '';
-            document.getElementById('ai-query-rationale').style.display = 'none';
         }
     }
     modal.show();
@@ -2420,17 +2419,123 @@ function showAIQuery(initialQuery = '') {
     if (initialQuery) setTimeout(runAIQuery, 350);
 }
 
+function _renderFacilityList(facilities) {
+    return `<div class="ai-results-header">
+                <span>${facilities.length} matching facilit${facilities.length !== 1 ? 'ies' : 'y'}</span>
+                <div class="ai-results-actions">
+                    <button class="fp-btn" data-action="apply-ai-filter">Show on map</button>
+                    <button class="fp-btn" data-action="export-ai-results">Export CSV</button>
+                </div>
+             </div>
+             <div class="ai-results-list">` +
+        facilities.map(f => {
+            const typeLabel = f.layer === 'A2' ? 'Defence' : f.layer === 'G' ? 'Vaccine' : 'Research';
+            const typeColor = f.layer === 'A2' ? '#8b4a4a' : f.layer === 'G' ? '#27ae60' : '#4a7ab5';
+            return `<div class="ai-result-item">
+                <div class="ai-result-name">${esc(f.name || '[Unnamed]')}</div>
+                <div class="ai-result-meta">
+                    ${esc(f.country_name || f.country_iso3)}
+                    &nbsp;·&nbsp; <span style="color:${typeColor}">${typeLabel}</span>
+                    ${f.latest_containment
+                        ? ` &nbsp;·&nbsp; <span style="color:${bslColor(f.latest_containment)}">${esc(f.latest_containment)}</span>`
+                        : ''}
+                </div>
+             </div>`;
+        }).join('') +
+        `</div>`;
+}
+
+function _renderSubmissionTable(rows) {
+    const years = [...new Set(rows.map(r => r.year))].sort();
+    const forms = [...new Set(rows.map(r => r.form))].sort();
+    let html = '<table class="nq-data-table"><thead><tr><th>Year</th>';
+    for (const f of forms) html += `<th>Form ${esc(f)}</th>`;
+    html += '</tr></thead><tbody>';
+    for (const y of years) {
+        html += `<tr><td>${y}</td>`;
+        for (const f of forms) {
+            const match = rows.find(r => r.year === y && r.form === f);
+            if (match) {
+                html += `<td><span class="nq-status-dot ${match.status}"></span>${esc(match.status)}</td>`;
+            } else {
+                html += '<td>\u2014</td>';
+            }
+        }
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+function _renderRankedTable(rows) {
+    if (!rows.length) return '';
+    const keys = Object.keys(rows[0]).filter(k => k !== 'country_iso3');
+    let html = '<table class="nq-data-table"><thead><tr>';
+    for (const k of keys) html += `<th>${esc(k.replace(/_/g, ' '))}</th>`;
+    html += '</tr></thead><tbody>';
+    for (const r of rows) {
+        html += '<tr>';
+        for (const k of keys) html += `<td>${esc(String(r[k] ?? ''))}</td>`;
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+function _renderLegislationTable(rows) {
+    const categories = ['prohibitions', 'exports', 'imports', 'biosafety'];
+    let html = '<table class="nq-data-table"><thead><tr><th>Country</th><th>Year</th>';
+    for (const cat of categories) html += `<th>${cat.charAt(0).toUpperCase() + cat.slice(1)}</th>`;
+    html += '<th>Key laws</th></tr></thead><tbody>';
+    for (const r of rows.slice(0, 50)) {
+        html += `<tr><td>${esc(r.country_name || r.country_iso3)}</td><td>${r.year}</td>`;
+        for (const cat of categories) {
+            const has = r[cat + '_legislation'] || r[cat + '_regulations'] || r[cat + '_other_measures'];
+            html += `<td>${has ? '\u2713' : '\u2014'}</td>`;
+        }
+        const laws = r.key_laws || [];
+        html += `<td>${laws.slice(0, 2).map(esc).join('; ') || '\u2014'}</td></tr>`;
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+function _renderDefenceTable(rows) {
+    let html = '<table class="nq-data-table"><thead><tr><th>Country</th><th>Year</th><th>Details</th></tr></thead><tbody>';
+    for (const r of rows.slice(0, 50)) {
+        const name = esc(r.country_name || r.country_iso3);
+        let detail = '';
+        if (r.source === 'past_programme') {
+            if (r.has_offensive_programme) detail += `Offensive (${esc(r.offensive_period || '?')})`;
+            if (r.has_defensive_programme) detail += `${detail ? '; ' : ''}Defensive (${esc(r.defensive_period || '?')})`;
+        } else {
+            detail = esc(r.programme_name || 'Defence programme');
+            if (r.total_funding_amount) detail += ` \u2014 ${r.total_funding_amount} ${esc(r.total_funding_currency || '')}`;
+        }
+        html += `<tr><td>${name}</td><td>${r.year}</td><td>${detail}</td></tr>`;
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+function _renderStatsTable(rows) {
+    let html = '<table class="nq-data-table"><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>';
+    for (const r of rows) {
+        html += `<tr><td>${esc(String(r.metric || ''))}</td><td><strong>${esc(String(r.value ?? ''))}</strong></td></tr>`;
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
 async function runAIQuery() {
     const input      = document.getElementById('ai-query-input');
     const resultsEl  = document.getElementById('ai-query-results');
-    const rationaleEl= document.getElementById('ai-query-rationale');
     const btn        = document.getElementById('ai-query-submit');
     const q = input?.value?.trim();
     if (!q || q.length < 3) return;
     _aiQuery = q;
 
     resultsEl.innerHTML = '<div class="text-center py-3 text-muted">Querying AI…</div>';
-    rationaleEl.style.display = 'none';
     if (btn) btn.disabled = true;
 
     try {
@@ -2445,43 +2550,60 @@ async function runAIQuery() {
         }
         const data = await resp.json();
 
-        if (data.rationale) {
-            rationaleEl.textContent = '🤖 ' + data.rationale;
-            rationaleEl.style.display = 'block';
+        const qt = data.query_type || 'facility_search';
+
+        // ── Answer bar ──────────────────────────────────
+        let html = '';
+        if (data.answer) {
+            html += `<div class="nq-answer">\ud83e\udd16 ${esc(data.answer)}</div>`;
+        } else if (data.rationale) {
+            html += `<div class="nq-answer">\ud83e\udd16 ${esc(data.rationale)}</div>`;
         }
 
+        // ── Entity cards ────────────────────────────────
+        const entities = data.entities || [];
+        if (entities.length > 0) {
+            html += '<div class="nq-entities">';
+            for (const e of entities) {
+                if (e.type === 'compare') {
+                    const names = e.countries.map(c => esc(c.name)).join(' vs ');
+                    const isos = e.countries.map(c => c.iso3).join(',');
+                    html += `<div class="nq-compare-card" data-action="nq-compare" data-countries="${esc(isos)}">\u2696\ufe0f Compare ${names}</div>`;
+                } else if (e.type === 'country') {
+                    html += `<div class="nq-entity-card" data-action="nq-country" data-iso3="${esc(e.iso3)}">${esc(e.name)}</div>`;
+                } else if (e.type === 'facility') {
+                    const layerLabel = e.layer === 'A2' ? 'Defence' : e.layer === 'G' ? 'Vaccine' : 'Research';
+                    const layerCls = e.layer === 'A2' ? 'defence' : e.layer === 'G' ? 'vaccine' : 'research';
+                    html += `<div class="nq-entity-card" data-action="nq-facility" data-id="${esc(e.id)}" data-layer="${esc(e.layer)}">
+                        ${esc(e.name)} <span class="nq-entity-badge ${layerCls}">${layerLabel}</span>
+                    </div>`;
+                }
+            }
+            html += '</div>';
+        }
+
+        // ── Data table / facility list (type-specific) ──
         const facilities = data.facilities || [];
-        _aiResults = facilities;
+        const nqData = data.data;
 
-        if (!facilities.length) {
-            resultsEl.innerHTML = '<div class="text-muted text-center py-3">No matching facilities found. Try rephrasing your query.</div>';
-            return;
+        if (qt === 'facility_search' && facilities.length > 0) {
+            _aiResults = facilities;
+            html += _renderFacilityList(facilities);
+        } else if (qt === 'submission_history' && Array.isArray(nqData) && nqData.length > 0) {
+            html += _renderSubmissionTable(nqData);
+        } else if (qt === 'comparative' && !data.use_compare_mode && Array.isArray(nqData) && nqData.length > 0) {
+            html += _renderRankedTable(nqData);
+        } else if (qt === 'legislation' && Array.isArray(nqData) && nqData.length > 0) {
+            html += _renderLegislationTable(nqData);
+        } else if (qt === 'defence_programmes' && Array.isArray(nqData) && nqData.length > 0) {
+            html += _renderDefenceTable(nqData);
+        } else if (qt === 'aggregate_stats' && Array.isArray(nqData) && nqData.length > 0) {
+            html += _renderStatsTable(nqData);
+        } else if (qt === 'facility_search' && facilities.length === 0) {
+            html += '<div class="text-muted text-center py-3">No matching facilities found. Try rephrasing your query.</div>';
         }
 
-        resultsEl.innerHTML =
-            `<div class="ai-results-header">
-                <span>${facilities.length} matching facilit${facilities.length !== 1 ? 'ies' : 'y'}</span>
-                <div class="ai-results-actions">
-                    <button class="fp-btn" data-action="apply-ai-filter">Show on map</button>
-                    <button class="fp-btn" data-action="export-ai-results">Export CSV</button>
-                </div>
-             </div>
-             <div class="ai-results-list">` +
-            facilities.map(f => {
-                const typeLabel = f.layer === 'A2' ? 'Defence' : f.layer === 'G' ? 'Vaccine' : 'Research';
-                const typeColor = f.layer === 'A2' ? '#8b4a4a' : f.layer === 'G' ? '#27ae60' : '#4a7ab5';
-                return `<div class="ai-result-item">
-                    <div class="ai-result-name">${esc(f.name || '[Unnamed]')}</div>
-                    <div class="ai-result-meta">
-                        ${esc(f.country_name || f.country_iso3)}
-                        &nbsp;·&nbsp; <span style="color:${typeColor}">${typeLabel}</span>
-                        ${f.latest_containment
-                            ? ` &nbsp;·&nbsp; <span style="color:${bslColor(f.latest_containment)}">${esc(f.latest_containment)}</span>`
-                            : ''}
-                    </div>
-                 </div>`;
-            }).join('') +
-            `</div>`;
+        resultsEl.innerHTML = html;
     } catch (e) {
         const hint = e.message.includes('503') ? ' — ANTHROPIC_API_KEY not configured on this server' : '';
         resultsEl.innerHTML = `<div class="text-danger">Search failed: ${esc(e.message)}${hint}</div>`;
@@ -3294,6 +3416,37 @@ function initEventDelegation() {
             case 'export-ai-results':
                 exportAIResults(_aiResults);
                 break;
+            case 'nq-country': {
+                const iso3 = el.dataset.iso3;
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal'))?.hide();
+                setTimeout(() => selectCountry(iso3), 300);
+                break;
+            }
+            case 'nq-facility': {
+                const id = el.dataset.id;
+                const layer = el.dataset.layer;
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal'))?.hide();
+                setTimeout(() => {
+                    if (layer === 'A2') showDefenceEntityModal(id);
+                    else if (layer === 'G') showVaccineEntityModal(id);
+                    else showEntityModal(id);
+                }, 300);
+                break;
+            }
+            case 'nq-compare': {
+                const isos = el.dataset.countries.split(',');
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal'))?.hide();
+                setTimeout(() => {
+                    const selA = document.getElementById('cmp-country-a');
+                    const selB = document.getElementById('cmp-country-b');
+                    if (selA && isos[0]) selA.value = isos[0];
+                    if (selB && isos[1]) selB.value = isos[1];
+                    const compareModal = bootstrap.Modal.getOrCreateInstance(document.getElementById('compare-modal'));
+                    compareModal?.show();
+                    onCompareSelect();
+                }, 300);
+                break;
+            }
 
             // ── Actions / exports ──
             case 'export-csv':
