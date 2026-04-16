@@ -2279,9 +2279,7 @@ def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keyw
                      WHERE d.country_iso3 IN ({placeholders})) AS vaccine_facilities,
                     (SELECT COUNT(DISTINCT df.facility_name)
                      FROM defence_facilities df
-                     JOIN defence_programmes dp ON dp.id = df.programme_id
-                     JOIN documents d ON d.id = dp.document_id
-                     WHERE d.country_iso3 IN ({placeholders})) AS defence_facilities,
+                     WHERE df.country_iso3 IN ({placeholders})) AS defence_facilities,
                     (SELECT COUNT(*) FROM documents
                      WHERE country_iso3 IN ({placeholders}) AND NOT is_amendment) AS total_submissions
                 """,
