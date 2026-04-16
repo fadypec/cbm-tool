@@ -2864,10 +2864,18 @@ async function onCompareSelect() {
     const body = document.getElementById('cmp-body');
     body.innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
     try {
-        const [dataA, dataB] = await Promise.all([
+        const [dataA, dataB, defA, defB, vacA, vacB] = await Promise.all([
             api(`/api/country/${iso3a}`),
             api(`/api/country/${iso3b}`),
+            api(`/api/country/${iso3a}/defence`).catch(() => ({ entities: [] })),
+            api(`/api/country/${iso3b}/defence`).catch(() => ({ entities: [] })),
+            api(`/api/country/${iso3a}/vaccine`).catch(() => ({ entities: [] })),
+            api(`/api/country/${iso3b}/vaccine`).catch(() => ({ entities: [] })),
         ]);
+        dataA._defCount = defA.entities.length;
+        dataA._vacCount = vacA.entities.length;
+        dataB._defCount = defB.entities.length;
+        dataB._vacCount = vacB.entities.length;
         body.innerHTML = renderComparison(dataA, dataB);
     } catch (e) {
         body.innerHTML = `<div class="text-danger">Failed to load: ${esc(e.message)}</div>`;
@@ -2903,12 +2911,15 @@ function renderComparison(a, b) {
         return byYear;
     };
 
-    const miniGrid = (byYear) => {
+    const miniGrid = (byYear, countryName) => {
         const sortedYears = Object.keys(byYear).map(Number).sort((a, b) => a - b);
         return `<div class="cmp-compliance-mini">${sortedYears.map(yr => {
             const a1 = byYear[yr]['A1'];
             const cls = a1 === 'substantive' ? 'td-sub' : a1 === 'nothing_to_declare' ? 'td-ntd' : 'td-abs';
-            return `<span class="cmp-yr-dot ${cls}" title="${yr}: ${a1 || 'absent'}"></span>`;
+            const tip = a1 === 'substantive' ? `${countryName} submitted Form A1 in ${yr}`
+                      : a1 === 'nothing_to_declare' ? `${countryName} declared nothing for Form A1 in ${yr}`
+                      : `${countryName} did not submit Form A1 in ${yr}`;
+            return `<span class="cmp-yr-dot ${cls}" title="${tip}"></span>`;
         }).join('')}</div>`;
     };
 
@@ -2924,12 +2935,16 @@ function renderComparison(a, b) {
             </div>
 
             <div class="cmp-section-label">SUBMISSIONS</div>
-            <div class="cmp-stat-row"><span class="cmp-stat-key">Total CBMs filed</span><span class="cmp-stat-val">${subCount}</span></div>
-            ${miniGrid(years(d))}
+            <div class="cmp-stat-row"><span class="cmp-stat-key">Years with submissions <span title="Number of distinct years in which this country filed at least one CBM document (2011 revised-template era onwards for most countries)" style="cursor:help;opacity:0.6">&#9432;</span></span><span class="cmp-stat-val">${subCount}</span></div>
+            ${miniGrid(years(d), d.country_name)}
 
-            <div class="cmp-section-label">RESEARCH FACILITIES (A1)</div>
-            <div class="cmp-stat-row"><span class="cmp-stat-key">Unique facilities</span>
+            <div class="cmp-section-label">DECLARED FACILITIES</div>
+            <div class="cmp-stat-row"><span class="cmp-stat-key">Research (A1)</span>
                 <span class="cmp-stat-val ${d.facilities.length > 0 ? 'highlight' : ''}">${d.facilities.length}</span></div>
+            <div class="cmp-stat-row"><span class="cmp-stat-key">Defence (A2)</span>
+                <span class="cmp-stat-val">${d._defCount || '—'}</span></div>
+            <div class="cmp-stat-row"><span class="cmp-stat-key">Vaccine (G)</span>
+                <span class="cmp-stat-val">${d._vacCount || '—'}</span></div>
             <div class="cmp-stat-row"><span class="cmp-stat-key">BSL-4</span>
                 <span class="cmp-stat-val" style="color:#c0392b">${bsl4Count(d) || '—'}</span></div>
             <div class="cmp-stat-row"><span class="cmp-stat-key">BSL-3</span>
