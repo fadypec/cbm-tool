@@ -2265,7 +2265,67 @@ def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keyw
                     "use_compare_mode": False,
                 }
 
-        # ── Path C: General stats ─────────────────────────────────────────────
+        # ── Path C: Country-specific stats ─────────────────────────────────────
+        if countries:
+            placeholders = ",".join(["%s"] * len(countries))
+            params = list(countries)
+            cur.execute(
+                f"""
+                SELECT
+                    (SELECT COUNT(*) FROM facilities WHERE country_iso3 IN ({placeholders})) AS a1_facilities,
+                    (SELECT COUNT(DISTINCT vfy.facility_name)
+                     FROM vaccine_facility_years vfy
+                     JOIN documents d ON d.id = vfy.document_id
+                     WHERE d.country_iso3 IN ({placeholders})) AS vaccine_facilities,
+                    (SELECT COUNT(DISTINCT df.facility_name)
+                     FROM defence_facilities df
+                     JOIN defence_programmes dp ON dp.id = df.programme_id
+                     JOIN documents d ON d.id = dp.document_id
+                     WHERE d.country_iso3 IN ({placeholders})) AS defence_facilities,
+                    (SELECT COUNT(*) FROM documents
+                     WHERE country_iso3 IN ({placeholders}) AND NOT is_amendment) AS total_submissions
+                """,
+                params * 4,
+            )
+            row = cur.fetchone()
+            a1 = row["a1_facilities"] if row else 0
+            vacc = row["vaccine_facilities"] if row else 0
+            defe = row["defence_facilities"] if row else 0
+            subs = row["total_submissions"] if row else 0
+
+            country_names = _nq_country_names(cur, countries)
+            country_list = ", ".join(country_names.get(c, c) for c in countries)
+
+            parts = []
+            if a1:
+                parts.append(f"{a1} research {'facility' if a1 == 1 else 'facilities'} (Form A1)")
+            if vacc:
+                parts.append(f"{vacc} vaccine production {'facility' if vacc == 1 else 'facilities'} (Form G)")
+            if defe:
+                parts.append(f"{defe} defence {'facility' if defe == 1 else 'facilities'} (Form A2)")
+            if not parts:
+                answer = f"No facilities declared by {country_list}."
+            else:
+                answer = f"{country_list} has declared {', '.join(parts)} across {subs} submission{'s' if subs != 1 else ''}."
+
+            entities = [
+                {"type": "country", "iso3": c, "name": country_names.get(c, c)}
+                for c in countries
+            ]
+            return {
+                "answer": answer,
+                "data": [
+                    {"metric": "research facilities (A1)", "value": a1},
+                    {"metric": "vaccine facilities (G)", "value": vacc},
+                    {"metric": "defence facilities (A2)", "value": defe},
+                    {"metric": "total submissions", "value": subs},
+                ],
+                "entities": entities,
+                "facilities": [],
+                "use_compare_mode": False,
+            }
+
+        # ── Path D: General stats ─────────────────────────────────────────────
         cur.execute(
             """
             SELECT
