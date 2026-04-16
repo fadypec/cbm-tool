@@ -1426,6 +1426,53 @@ class TestNaturalQueryExpanded:
         assert body["query_type"] == "comparative"
         assert body["use_compare_mode"] is True
 
+    def test_comparative_two_countries_uses_compare_mode(self, client):
+        """Two-country comparative with no filters should return use_compare_mode=True and a compare entity card."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        cur.fetchall.side_effect = [
+            [
+                {"country_iso3": "GBR", "country_name": "United Kingdom"},
+                {"country_iso3": "FRA", "country_name": "France"},
+            ],
+        ]
+        classification = self._classification(
+            query_type="comparative",
+            countries=["GBR", "FRA"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "Compare UK and France"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["use_compare_mode"] is True
+        assert any(e["type"] == "compare" for e in body["entities"])
+
+    def test_comparative_ranked_query(self, client):
+        """Comparative with BSL filter should return ranked data and use_compare_mode=False."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        cur.fetchall.side_effect = [
+            [
+                {"country_iso3": "USA", "country_name": "United States", "count": 5},
+                {"country_iso3": "GBR", "country_name": "United Kingdom", "count": 3},
+            ],
+        ]
+        classification = self._classification(
+            query_type="comparative",
+            countries=[],
+            bsl=["BSL-4"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "Which countries have most BSL-4 labs?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["use_compare_mode"] is False
+        assert len(body["data"]) >= 1
+
     def test_facility_search_returns_country_entities(self, client):
         """facility_search with country filter should include country entity cards."""
         c, pool = client
@@ -1472,3 +1519,316 @@ class TestNaturalQueryExpanded:
         # The handler should only receive valid ISO3 codes
         call_kwargs = mock_handler.call_args[1]
         assert call_kwargs["countries"] == ["DEU", "GBR"]
+
+    def test_submission_history_returns_years(self, client):
+        """submission_history for a single country returns rows, answer with country name, and entity card."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        cur.fetchall.side_effect = [
+            # _nq_country_names lookup (countries specified → called first)
+            [{"country_iso3": "AUT", "country_name": "Austria"}],
+            # compliance rows
+            [
+                {"country_iso3": "AUT", "year": 2022, "form": "A1", "status": "substantive"},
+                {"country_iso3": "AUT", "year": 2023, "form": "A1", "status": "substantive"},
+            ],
+        ]
+        classification = self._classification(
+            query_type="submission_history",
+            countries=["AUT"],
+            forms=["A1"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "Has Austria submitted Form A1?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "submission_history"
+        assert len(body["data"]) == 2
+        assert body["data"][0]["year"] == 2022
+        assert "Austria" in body["answer"]
+        assert any(e["type"] == "country" and e["iso3"] == "AUT" for e in body["entities"])
+
+    def test_submission_history_no_countries_returns_all(self, client):
+        """submission_history with no country filter returns rows for all matching countries."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        cur.fetchall.side_effect = [
+            # No country pre-lookup (countries=[])
+            # compliance rows returned directly
+            [
+                {"country_iso3": "DEU", "year": 2023, "form": "G", "status": "substantive"},
+                {"country_iso3": "GBR", "year": 2023, "form": "G", "status": "nothing_to_declare"},
+            ],
+            # _nq_country_names lookup for seen countries
+            [
+                {"country_iso3": "DEU", "country_name": "Germany"},
+                {"country_iso3": "GBR", "country_name": "United Kingdom"},
+            ],
+        ]
+        classification = self._classification(
+            query_type="submission_history",
+            countries=[],
+            forms=["G"],
+            year_min=2023,
+            year_max=2023,
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "Form G submissions in 2023"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "submission_history"
+        assert len(body["data"]) == 2
+
+    def test_country_overview_returns_summary(self, client):
+        """country_overview should return composite data and a Haiku-generated answer."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        # Sequential calls: (1) country names, (2) submission summary, (3) facility counts, (4) legislation
+        cur.fetchall.side_effect = [
+            [{"country_iso3": "DEU", "country_name": "Germany"}],  # _nq_country_names
+            [{"form": "A1", "total": 14, "substantive": 12}],       # submission summary
+        ]
+        cur.fetchone.side_effect = [
+            {"a1_facilities": 25, "vaccine_facilities": 3, "defence_facilities": 10},  # facility counts
+            None,  # legislation (no record)
+        ]
+        classification = {
+            "query_type": "country_overview",
+            "countries": ["DEU"], "forms": [], "year_min": None, "year_max": None,
+            "organisms": [], "keywords": [], "bsl": [],
+            "legislation_category": None, "rationale": "Overview of Germany."
+        }
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                # First call: classification. Second call: summarization.
+                mock_cls.return_value.messages.create.side_effect = [
+                    _mock_claude_response(json.dumps(classification)),
+                    _mock_claude_response("Germany has submitted CBMs consistently, declaring 25 research facilities."),
+                ]
+                r = c.post("/api/natural-query", json={"q": "Tell me about Germany"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "country_overview"
+        assert "Germany" in body["answer"]
+        assert any(e["type"] == "country" and e["iso3"] == "DEU" for e in body["entities"])
+
+    def test_legislation_single_country(self, client):
+        """legislation query for a single country should return rows and include the country name in the answer."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        cur.fetchall.side_effect = [
+            # _nq_country_names lookup for specified countries
+            [{"country_iso3": "AUS", "country_name": "Australia"}],
+            # legislation rows
+            [
+                {
+                    "country_iso3": "AUS",
+                    "country_name": "Australia",
+                    "year": 2024,
+                    "prohibitions_legislation": True,
+                    "prohibitions_regulations": True,
+                    "prohibitions_other_measures": False,
+                    "exports_legislation": True,
+                    "exports_regulations": False,
+                    "exports_other_measures": False,
+                    "imports_legislation": False,
+                    "imports_regulations": False,
+                    "imports_other_measures": False,
+                    "biosafety_legislation": True,
+                    "biosafety_regulations": True,
+                    "biosafety_other_measures": False,
+                    "key_laws": ["Biosecurity Act 2015"],
+                }
+            ],
+        ]
+        classification = self._classification(
+            query_type="legislation",
+            countries=["AUS"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.side_effect = [
+                    _mock_claude_response(json.dumps(classification)),
+                    _mock_claude_response("Australia has comprehensive legislation prohibiting biological weapons, with export controls under the Biosecurity Act 2015."),
+                ]
+                r = c.post("/api/natural-query", json={"q": "What legislation does Australia have?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "legislation"
+        assert len(body["data"]) >= 1
+        assert "Australia" in body["answer"]
+
+    def test_legislation_category_filter(self, client):
+        """legislation query with category filter should return rows for matching countries."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        cur.fetchall.side_effect = [
+            # No country pre-lookup (countries=[])
+            # legislation rows for DEU and GBR with exports columns
+            [
+                {
+                    "country_iso3": "DEU",
+                    "country_name": "Germany",
+                    "year": 2024,
+                    "exports_legislation": True,
+                    "exports_regulations": True,
+                    "exports_other_measures": False,
+                    "key_laws": ["Außenwirtschaftsgesetz"],
+                },
+                {
+                    "country_iso3": "GBR",
+                    "country_name": "United Kingdom",
+                    "year": 2024,
+                    "exports_legislation": True,
+                    "exports_regulations": False,
+                    "exports_other_measures": True,
+                    "key_laws": ["Export Control Act 2002"],
+                },
+            ],
+            # _nq_country_names lookup for seen countries
+            [
+                {"country_iso3": "DEU", "country_name": "Germany"},
+                {"country_iso3": "GBR", "country_name": "United Kingdom"},
+            ],
+        ]
+        classification = self._classification(
+            query_type="legislation",
+            countries=[],
+            legislation_category="exports",
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.side_effect = [
+                    _mock_claude_response(json.dumps(classification)),
+                    _mock_claude_response("Germany and United Kingdom both have export control legislation for biological agents."),
+                ]
+                r = c.post("/api/natural-query", json={"q": "Which countries have export controls for pathogens?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "legislation"
+        assert len(body["data"]) >= 1
+
+    def test_defence_past_offensive(self, client):
+        """defence_programmes query for Form F/offensive should return past_programme rows."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        cur.fetchall.side_effect = [
+            # past_programmes rows (query_past=True because forms=["F"])
+            [
+                {
+                    "country_iso3": "GBR",
+                    "country_name": "United Kingdom",
+                    "year": 2023,
+                    "has_offensive_programme": True,
+                    "offensive_period": "1940-1957",
+                    "offensive_summary": "Offensive BW programme terminated 1957",
+                    "has_defensive_programme": True,
+                    "defensive_period": "1957-present",
+                    "defensive_summary": "Defensive research only",
+                    "source": "past_programme",
+                }
+            ],
+            # _nq_country_names lookup for seen countries (no countries specified)
+            [{"country_iso3": "GBR", "country_name": "United Kingdom"}],
+        ]
+        classification = self._classification(
+            query_type="defence_programmes",
+            forms=["F"],
+            keywords=["offensive"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.side_effect = [
+                    _mock_claude_response(json.dumps(classification)),
+                    _mock_claude_response("The United Kingdom had an offensive BW programme from 1940 to 1957."),
+                ]
+                r = c.post("/api/natural-query", json={"q": "Which countries had offensive BW programmes?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "defence_programmes"
+        assert len(body["data"]) >= 1
+
+    def test_defence_current_programmes(self, client):
+        """defence_programmes query for Form A2/budget should return defence_programme rows."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        cur.fetchall.side_effect = [
+            # _nq_country_names lookup for CAN (countries specified)
+            [{"country_iso3": "CAN", "country_name": "Canada"}],
+            # defence_programmes rows (query_current=True because forms=["A2"])
+            [
+                {
+                    "country_iso3": "CAN",
+                    "country_name": "Canada",
+                    "year": 2023,
+                    "programme_name": "BDRP",
+                    "responsible_org": "DRDC Suffield",
+                    "objectives_summary": "Biological defence research",
+                    "total_funding_amount": 50000000,
+                    "total_funding_currency": "CAD",
+                    "uses_contractors": False,
+                    "source": "defence_programme",
+                }
+            ],
+        ]
+        classification = self._classification(
+            query_type="defence_programmes",
+            countries=["CAN"],
+            forms=["A2"],
+            keywords=["budget"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.side_effect = [
+                    _mock_claude_response(json.dumps(classification)),
+                    _mock_claude_response("Canada's BDRP had a funding of 50,000,000 CAD in 2023."),
+                ]
+                r = c.post("/api/natural-query", json={"q": "What is Canada's defence programme budget?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "defence_programmes"
+        assert "Canada" in body["answer"]
+
+    def test_aggregate_country_count(self, client):
+        """aggregate_stats with forms filter should return the count of submitting countries."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        # Path B: forms present, no BSL
+        # fetchall for _nq_country_names (countries=[]) is not called in Path B with no countries
+        cur.fetchone.return_value = {"count": 42}
+        classification = self._classification(
+            query_type="aggregate_stats",
+            forms=["A1"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "How many countries submit Form A1?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "aggregate_stats"
+        assert "42" in body["answer"]
+
+    def test_aggregate_facility_count(self, client):
+        """aggregate_stats with BSL filter should return the count of matching facilities."""
+        c, pool = client
+        cur = _setup_cursor(pool)
+        # Path A: BSL filter present
+        # First fetchall call is for _nq_country_names (countries=[] → not called)
+        cur.fetchone.return_value = {"count": 8}
+        classification = self._classification(
+            query_type="aggregate_stats",
+            bsl=["BSL-4"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "How many BSL-4 facilities are there?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "aggregate_stats"
+        assert "8" in body["answer"]
