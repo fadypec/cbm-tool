@@ -1361,6 +1361,12 @@ def _nq_clean_int(val, lo=1988, hi=2030):
     return max(lo, min(hi, n))
 
 
+_NQ_FALLBACK_NAMES = {
+    "CHN": "China", "FRA": "France", "RUS": "Russia", "IND": "India",
+    "PRK": "North Korea", "ISR": "Israel", "EGY": "Egypt", "IRN": "Iran",
+}
+
+
 def _nq_country_names(cur, iso3_list):
     """Look up country names for a list of ISO3 codes. Returns {iso3: name}."""
     if not iso3_list:
@@ -1375,7 +1381,12 @@ def _nq_country_names(cur, iso3_list):
         """,
         iso3_list,
     )
-    return {r["country_iso3"]: r["country_name"] for r in cur.fetchall()}
+    result = {r["country_iso3"]: r["country_name"] for r in cur.fetchall()}
+    # Fall back to static names for countries with no documents (restricted/absent)
+    for iso3 in iso3_list:
+        if iso3 not in result and iso3 in _NQ_FALLBACK_NAMES:
+            result[iso3] = _NQ_FALLBACK_NAMES[iso3]
+    return result
 
 
 _NQ_SUMMARISE_SYSTEM = """You are a concise data summarizer for a BWC Confidence-Building Measures database.
@@ -1904,9 +1915,22 @@ def _nq_comparative(*, countries, forms, bsl, keywords, **_kw):
         cur.execute(sql, params)
         rows = [dict(r) for r in cur.fetchall()]
 
+        # Detect requested countries missing from results (restricted/no data)
+        missing_names: list[str] = []
+        if countries:
+            found_iso3 = {r["country_iso3"] for r in rows}
+            missing_iso3 = [c for c in countries if c not in found_iso3]
+            if missing_iso3:
+                missing_map = _nq_country_names(cur, missing_iso3)
+                missing_names = [missing_map.get(c, c) for c in missing_iso3]
+
     if not rows:
+        if missing_names:
+            answer = f"No data available for {', '.join(missing_names)}. These countries have not submitted public CBM reports."
+        else:
+            answer = "No matching data found for comparison."
         return {
-            "answer": "No matching data found for comparison.",
+            "answer": answer,
             "data": [],
             "entities": [],
             "facilities": [],
@@ -1919,16 +1943,22 @@ def _nq_comparative(*, countries, forms, bsl, keywords, **_kw):
     top_area = top.get("area_m2")
     n_countries = len(rows)
 
+    no_data_note = ""
+    if missing_names:
+        no_data_note = f"\nNote: no public CBM data available for {', '.join(missing_names)}."
+
     if top_area and bsl:
         answer = (
             f"{top_name} has the most declared {'/'.join(bsl)} floorspace "
             f"({top_area:,.0f} m\u00b2 across {top_count} {'facility' if top_count == 1 else 'facilities'}). "
-            f"{n_countries} {'country' if n_countries == 1 else 'countries'} total."
+            f"{n_countries} {'country' if n_countries == 1 else 'countries'} with data."
+            f"{no_data_note}"
         )
     else:
         answer = (
             f"{top_name} leads with {top_count} {metric}. "
             f"{n_countries} {'country' if n_countries == 1 else 'countries'} total."
+            f"{no_data_note}"
         )
 
     entities = [
@@ -2252,6 +2282,19 @@ def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keyw
             total_facilities = sum(r["facility_count"] for r in rows)
             total_area = sum(r.get("total_area_m2") or 0 for r in rows) if area_col else None
 
+            # Detect requested countries missing from results
+            missing_names: list[str] = []
+            if countries:
+                found_iso3 = {r["country_iso3"] for r in rows}
+                missing_iso3 = [c for c in countries if c not in found_iso3]
+                if missing_iso3:
+                    missing_map = _nq_country_names(cur, missing_iso3)
+                    missing_names = [missing_map.get(c, c) for c in missing_iso3]
+
+            no_data_note = ""
+            if missing_names:
+                no_data_note = f"\nNote: no public CBM data available for {', '.join(missing_names)}."
+
             # Build answer
             entities = [
                 {"type": "country", "iso3": r["country_iso3"], "name": r.get("country_name") or r["country_iso3"]}
@@ -2259,21 +2302,24 @@ def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keyw
             ]
 
             if not rows:
-                answer = f"No {bsl_val} facilities found."
+                if missing_names:
+                    answer = f"No data available for {', '.join(missing_names)}. These countries have not submitted public CBM reports."
+                else:
+                    answer = f"No {bsl_val} facilities found."
             elif countries and len(countries) == 1:
                 r = rows[0]
                 name = r.get("country_name") or r["country_iso3"]
                 parts = [f"{r['facility_count']} {bsl_val} {'facility' if r['facility_count'] == 1 else 'facilities'}"]
                 if area_col and r.get("total_area_m2"):
                     parts.append(f"{r['total_area_m2']:,.0f} m\u00b2 total declared area")
-                answer = f"{name} has {' with '.join(parts)}."
+                answer = f"{name} has {' with '.join(parts)}.{no_data_note}"
             elif countries and len(countries) > 1:
                 parts = []
                 for r in rows:
                     name = r.get("country_name") or r["country_iso3"]
                     area_str = f" ({r['total_area_m2']:,.0f} m\u00b2)" if area_col and r.get("total_area_m2") else ""
                     parts.append(f"{name}: {r['facility_count']}{area_str}")
-                answer = f"{bsl_val} facilities:\n" + "\n".join(parts)
+                answer = f"{bsl_val} facilities:\n" + "\n".join(parts) + no_data_note
             else:
                 top = rows[0]
                 top_name = top.get("country_name") or top["country_iso3"]
