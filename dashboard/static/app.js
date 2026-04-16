@@ -2935,7 +2935,7 @@ function renderComparison(a, b) {
             </div>
 
             <div class="cmp-section-label">SUBMISSIONS</div>
-            <div class="cmp-stat-row"><span class="cmp-stat-key">Years with submissions <span title="Number of distinct years in which this country filed at least one CBM document (2011 revised-template era onwards for most countries)" style="cursor:help;opacity:0.6">&#9432;</span></span><span class="cmp-stat-val">${subCount}</span></div>
+            <div class="cmp-stat-row"><span class="cmp-stat-key">Years with submissions <span title="Distinct years in which this country filed at least one CBM form (any of A1, A2, B, C, E, F, G). Most countries' earliest public records on the UN portal date from 2011; some have earlier records back to 1988." style="cursor:help;opacity:0.6">&#9432;</span></span><span class="cmp-stat-val">${subCount}</span></div>
             ${miniGrid(years(d), d.country_name)}
 
             <div class="cmp-section-label">DECLARED FACILITIES</div>
