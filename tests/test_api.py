@@ -1814,12 +1814,14 @@ class TestNaturalQueryExpanded:
         assert "42" in body["answer"]
 
     def test_aggregate_facility_count(self, client):
-        """aggregate_stats with BSL filter should return the count of matching facilities."""
+        """aggregate_stats with BSL filter should return ranked country data with area."""
         c, pool = client
         cur = _setup_cursor(pool)
-        # Path A: BSL filter present
-        # First fetchall call is for _nq_country_names (countries=[] → not called)
-        cur.fetchone.return_value = {"count": 8}
+        # Path A: BSL filter — now returns ranked rows per country with area
+        cur.fetchall.return_value = [
+            {"country_iso3": "USA", "country_name": "United States", "facility_count": 5, "total_area_m2": 3200.0},
+            {"country_iso3": "GBR", "country_name": "United Kingdom", "facility_count": 3, "total_area_m2": 1500.0},
+        ]
         classification = self._classification(
             query_type="aggregate_stats",
             bsl=["BSL-4"],
@@ -1827,8 +1829,10 @@ class TestNaturalQueryExpanded:
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             with patch("api.main._anthropic.Anthropic") as mock_cls:
                 mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
-                r = c.post("/api/natural-query", json={"q": "How many BSL-4 facilities are there?"})
+                r = c.post("/api/natural-query", json={"q": "Who has the most BSL-4 floorspace?"})
         assert r.status_code == 200
         body = r.json()
         assert body["query_type"] == "aggregate_stats"
-        assert "8" in body["answer"]
+        assert "United States" in body["answer"]
+        assert len(body["data"]) == 2
+        assert body["data"][0]["area_m2"] == 3200.0

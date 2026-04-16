@@ -1829,20 +1829,25 @@ def _nq_comparative(*, countries, forms, bsl, keywords, **_kw):
         params.extend(countries)
 
     if bsl:
-        # Count A1 facilities per country filtered by BSL level
+        # Count A1 facilities per country filtered by BSL level, include area
         bsl_conditions = " OR ".join(
             ["fy.highest_containment ILIKE %s"] * len(bsl)
         )
         bsl_params = [f"%{level}%" for level in bsl]
+        bsl_num = "".join(c for c in bsl[0] if c.isdigit())
+        area_col = f"fy.bsl{bsl_num}_area_m2" if bsl_num in ("2", "3", "4") else None
+        area_select = f", SUM({area_col})::float AS area_m2" if area_col else ""
         sql = f"""
             {cn_cte}
-            SELECT f.country_iso3, cn.country_name, COUNT(DISTINCT f.canonical_facility_id) AS count
+            SELECT f.country_iso3, cn.country_name,
+                   COUNT(DISTINCT f.canonical_facility_id) AS count
+                   {area_select}
             FROM facilities f
             LEFT JOIN cn ON cn.country_iso3 = f.country_iso3
             LEFT JOIN facility_years fy ON fy.canonical_facility_id = f.canonical_facility_id
             WHERE ({bsl_conditions}) {country_filter}
             GROUP BY f.country_iso3, cn.country_name
-            ORDER BY count DESC
+            ORDER BY {f"area_m2 DESC NULLS LAST" if area_col else "count DESC"}
             LIMIT 10
         """
         params = bsl_params + params
@@ -1911,12 +1916,20 @@ def _nq_comparative(*, countries, forms, bsl, keywords, **_kw):
     top = rows[0]
     top_name = top.get("country_name") or top.get("country_iso3", "Unknown")
     top_count = top.get("count", 0)
+    top_area = top.get("area_m2")
     n_countries = len(rows)
 
-    answer = (
-        f"{top_name} leads with {top_count} {metric}. "
-        f"{n_countries} {'country' if n_countries == 1 else 'countries'} total."
-    )
+    if top_area and bsl:
+        answer = (
+            f"{top_name} has the most declared {'/'.join(bsl)} floorspace "
+            f"({top_area:,.0f} m\u00b2 across {top_count} {'facility' if top_count == 1 else 'facilities'}). "
+            f"{n_countries} {'country' if n_countries == 1 else 'countries'} total."
+        )
+    else:
+        answer = (
+            f"{top_name} leads with {top_count} {metric}. "
+            f"{n_countries} {'country' if n_countries == 1 else 'countries'} total."
+        )
 
     entities = [
         {"type": "country", "iso3": r["country_iso3"], "name": r.get("country_name") or r["country_iso3"]}
@@ -2199,27 +2212,100 @@ def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keyw
         # ── Path A: BSL filter present ───────────────────────────────────────
         if bsl:
             bsl_val = bsl[0]
-            params = [f"%{bsl_val}%"]
-            sql = "SELECT COUNT(*) AS count FROM facilities f WHERE f.latest_containment ILIKE %s"
+            # Determine which area column to use (BSL-4, BSL-3, or BSL-2)
+            bsl_num = "".join(c for c in bsl_val if c.isdigit())
+            area_col = f"bsl{bsl_num}_area_m2" if bsl_num in ("2", "3", "4") else None
+
+            # Query: rank countries by facility count + total area
+            params: list = [f"%{bsl_val}%"]
+            area_select = f", SUM(fy.{area_col})::float AS total_area_m2" if area_col else ""
+            area_join = (
+                "LEFT JOIN facility_years fy ON fy.canonical_facility_id = f.canonical_facility_id"
+                if area_col else ""
+            )
+            country_filter = ""
             if countries:
                 placeholders = ",".join(["%s"] * len(countries))
-                sql += f" AND f.country_iso3 IN ({placeholders})"
+                country_filter = f"AND f.country_iso3 IN ({placeholders})"
                 params.extend(countries)
-            cur.execute(sql, params)
-            row = cur.fetchone()
-            count = row["count"] if row else 0
 
-            country_names = _nq_country_names(cur, countries) if countries else {}
-            if countries:
-                country_list = ", ".join(country_names.get(c, c) for c in countries)
-                answer = f"{count} {bsl_val} facilities declared in {country_list}."
+            sql = f"""
+                WITH cn AS (
+                    SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+                    FROM documents WHERE country_name IS NOT NULL
+                    ORDER BY country_iso3, id
+                )
+                SELECT f.country_iso3, cn.country_name,
+                       COUNT(DISTINCT f.canonical_facility_id) AS facility_count
+                       {area_select}
+                FROM facilities f
+                LEFT JOIN cn ON cn.country_iso3 = f.country_iso3
+                {area_join}
+                WHERE f.latest_containment ILIKE %s {country_filter}
+                GROUP BY f.country_iso3, cn.country_name
+                ORDER BY {f"total_area_m2 DESC NULLS LAST" if area_col else "facility_count DESC"}
+                LIMIT 15
+            """
+            cur.execute(sql, params)
+            rows = [dict(r) for r in cur.fetchall()]
+
+            total_facilities = sum(r["facility_count"] for r in rows)
+            total_area = sum(r.get("total_area_m2") or 0 for r in rows) if area_col else None
+
+            # Build answer
+            entities = [
+                {"type": "country", "iso3": r["country_iso3"], "name": r.get("country_name") or r["country_iso3"]}
+                for r in rows
+            ]
+
+            if not rows:
+                answer = f"No {bsl_val} facilities found."
+            elif countries and len(countries) == 1:
+                r = rows[0]
+                name = r.get("country_name") or r["country_iso3"]
+                parts = [f"{r['facility_count']} {bsl_val} {'facility' if r['facility_count'] == 1 else 'facilities'}"]
+                if area_col and r.get("total_area_m2"):
+                    parts.append(f"{r['total_area_m2']:,.0f} m\u00b2 total declared area")
+                answer = f"{name} has {' with '.join(parts)}."
+            elif countries and len(countries) > 1:
+                parts = []
+                for r in rows:
+                    name = r.get("country_name") or r["country_iso3"]
+                    area_str = f" ({r['total_area_m2']:,.0f} m\u00b2)" if area_col and r.get("total_area_m2") else ""
+                    parts.append(f"{name}: {r['facility_count']}{area_str}")
+                answer = f"{bsl_val} facilities:\n" + "\n".join(parts)
             else:
-                answer = f"{count} {bsl_val} facilities declared."
+                top = rows[0]
+                top_name = top.get("country_name") or top["country_iso3"]
+                if area_col and top.get("total_area_m2"):
+                    answer = (
+                        f"{top_name} has the most declared {bsl_val} floorspace "
+                        f"({top['total_area_m2']:,.0f} m\u00b2 across {top['facility_count']} "
+                        f"{'facility' if top['facility_count'] == 1 else 'facilities'}). "
+                        f"{total_facilities} {bsl_val} facilities across {len(rows)} countries total."
+                    )
+                else:
+                    answer = (
+                        f"{top_name} leads with {top['facility_count']} {bsl_val} facilities. "
+                        f"{total_facilities} total across {len(rows)} countries."
+                    )
+
+            # Build data rows for display
+            data_rows = []
+            for r in rows:
+                row_data = {
+                    "country_iso3": r["country_iso3"],
+                    "country_name": r.get("country_name") or r["country_iso3"],
+                    "count": r["facility_count"],
+                }
+                if area_col and r.get("total_area_m2"):
+                    row_data["area_m2"] = round(r["total_area_m2"], 1)
+                data_rows.append(row_data)
 
             return {
                 "answer": answer,
-                "data": [{"metric": f"{bsl_val} facility count", "value": count}],
-                "entities": [],
+                "data": data_rows,
+                "entities": entities,
                 "facilities": [],
                 "use_compare_mode": False,
             }
