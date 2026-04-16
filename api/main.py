@@ -2273,13 +2273,8 @@ def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keyw
                 f"""
                 SELECT
                     (SELECT COUNT(*) FROM facilities WHERE country_iso3 IN ({placeholders})) AS a1_facilities,
-                    (SELECT COUNT(DISTINCT vfy.facility_name)
-                     FROM vaccine_facility_years vfy
-                     JOIN documents d ON d.id = vfy.document_id
-                     WHERE d.country_iso3 IN ({placeholders})) AS vaccine_facilities,
-                    (SELECT COUNT(DISTINCT df.facility_name)
-                     FROM defence_facilities df
-                     WHERE df.country_iso3 IN ({placeholders})) AS defence_facilities,
+                    (SELECT COUNT(*) FROM vaccine_facilities WHERE country_iso3 IN ({placeholders})) AS vaccine_facilities,
+                    (SELECT COUNT(*) FROM defence_entities WHERE country_iso3 IN ({placeholders})) AS defence_facilities,
                     (SELECT COUNT(*) FROM documents
                      WHERE country_iso3 IN ({placeholders}) AND NOT is_amendment) AS total_submissions
                 """,
