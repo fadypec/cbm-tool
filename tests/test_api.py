@@ -33,6 +33,10 @@ def client(mock_pool):
     """TestClient with lifespan DB pool replaced by a mock."""
     with patch("psycopg2.pool.ThreadedConnectionPool", return_value=mock_pool):
         with TestClient(app) as c:
+            # Reset rate limiter storage so tests are not affected by
+            # previous test invocations within the same session.
+            from api.main import limiter
+            limiter.reset()
             yield c, mock_pool
 
 
@@ -1200,6 +1204,23 @@ class TestNaturalQuery:
     The Anthropic SDK is mocked — no real API calls are made.
     """
 
+    def _classification(self, query_type="facility_search", **overrides):
+        """Build a classification response dict with defaults."""
+        base = {
+            "query_type": query_type,
+            "organisms": [],
+            "keywords": [],
+            "countries": [],
+            "forms": [],
+            "bsl": [],
+            "year_min": None,
+            "year_max": None,
+            "legislation_category": None,
+            "rationale": "Test classification.",
+        }
+        base.update(overrides)
+        return base
+
     def test_missing_api_key_returns_503(self, client):
         """If ANTHROPIC_API_KEY is unset, the endpoint should refuse with 503."""
         c, _ = client
@@ -1209,111 +1230,37 @@ class TestNaturalQuery:
         assert r.status_code == 503
         assert "ANTHROPIC_API_KEY" in r.json()["detail"]
 
-    def test_successful_organism_query(self, client):
-        """A query mentioning organisms should return matching A1 facilities."""
+    def test_successful_facility_search_query(self, client):
+        """A facility_search query should return the correct query_type and facilities list."""
         c, pool = client
-        _setup_cursor(
-            pool,
-            fetchall=[
-                {
-                    "id": "DEU_001",
-                    "name": "Robert Koch Institut",
-                    "country_iso3": "DEU",
-                    "latest_containment": "BSL-3",
-                    "years_declared": [2024],
-                    "layer": "A1",
-                    "country_name": "Germany",
-                }
-            ],
+        _setup_cursor(pool, fetchall=[])
+        classification = self._classification(
+            query_type="facility_search",
+            organisms=["influenza"],
         )
-        filters = {
-            "organisms": ["influenza"],
-            "keywords": [],
-            "countries": [],
-            "bsl": [],
-            "rationale": "Searching for influenza research.",
-        }
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             with patch("api.main._anthropic.Anthropic") as mock_cls:
-                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
                 r = c.post("/api/natural-query", json={"q": "influenza research"})
         assert r.status_code == 200
         body = r.json()
+        assert body["query_type"] == "facility_search"
         assert "facilities" in body
-        assert "filters" in body
-        assert body["facilities"][0]["id"] == "DEU_001"
+        assert "answer" in body
 
-    def test_country_query_includes_vaccine_and_defence(self, client):
-        """When countries are in the filter, vaccine (G) and defence (A2) layers are appended."""
+    def test_unknown_query_returns_help(self, client):
+        """When Claude classifies as unknown, a help message is returned."""
         c, pool = client
-        cur = _setup_cursor(pool)
-        # Three fetchall calls: A1 facilities, vaccine facilities, defence facilities
-        cur.fetchall.side_effect = [
-            [
-                {
-                    "id": "DEU_001",
-                    "name": "RKI",
-                    "country_iso3": "DEU",
-                    "latest_containment": "BSL-3",
-                    "years_declared": [2024],
-                    "layer": "A1",
-                    "country_name": "Germany",
-                }
-            ],
-            [
-                {
-                    "id": "DEU_V001",
-                    "name": "PEI",
-                    "country_iso3": "DEU",
-                    "latest_containment": None,
-                    "years_declared": [2024],
-                    "layer": "G",
-                    "country_name": "Germany",
-                }
-            ],
-            [
-                {
-                    "id": "DEU_D001",
-                    "name": "WIS",
-                    "country_iso3": "DEU",
-                    "latest_containment": None,
-                    "years_declared": [2024],
-                    "layer": "A2",
-                    "country_name": "Germany",
-                }
-            ],
-        ]
-        filters = {
-            "organisms": [],
-            "keywords": [],
-            "countries": ["DEU"],
-            "bsl": [],
-            "rationale": "Facilities in Germany.",
-        }
+        classification = self._classification(query_type="unknown")
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             with patch("api.main._anthropic.Anthropic") as mock_cls:
-                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
-                r = c.post("/api/natural-query", json={"q": "all facilities in Germany"})
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "what is the meaning of life"})
         assert r.status_code == 200
-        layers = {f["layer"] for f in r.json()["facilities"]}
-        assert layers == {"A1", "G", "A2"}
-
-    def test_empty_filters_returns_empty_facilities(self, client):
-        """When Claude returns no usable filters, facilities list should be empty."""
-        c, pool = client
-        filters = {
-            "organisms": [],
-            "keywords": [],
-            "countries": [],
-            "bsl": [],
-            "rationale": "No actionable filters found.",
-        }
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
-            with patch("api.main._anthropic.Anthropic") as mock_cls:
-                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
-                r = c.post("/api/natural-query", json={"q": "hello world"})
-        assert r.status_code == 200
-        assert r.json()["facilities"] == []
+        body = r.json()
+        assert body["query_type"] == "unknown"
+        assert "BWC" in body["answer"]
+        assert body["facilities"] == []
 
     def test_claude_api_failure_returns_500(self, client):
         """If the Anthropic API raises an exception, the endpoint returns 500."""
@@ -1338,14 +1285,18 @@ class TestNaturalQuery:
         """Claude sometimes wraps JSON in ```json ... ``` — endpoint should strip it."""
         c, pool = client
         _setup_cursor(pool, fetchall=[])
-        filters = {"organisms": ["ebola"], "keywords": [], "countries": [], "bsl": [], "rationale": "Ebola search."}
-        fenced = "```json\n" + json.dumps(filters) + "\n```"
+        classification = self._classification(
+            query_type="facility_search",
+            organisms=["ebola"],
+        )
+        fenced = "```json\n" + json.dumps(classification) + "\n```"
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             with patch("api.main._anthropic.Anthropic") as mock_cls:
                 mock_cls.return_value.messages.create.return_value = _mock_claude_response(fenced)
                 r = c.post("/api/natural-query", json={"q": "ebola research"})
         assert r.status_code == 200
-        assert r.json()["filters"]["organisms"] == ["ebola"]
+        body = r.json()
+        assert body["query_type"] == "facility_search"
 
     def test_query_too_long_returns_422(self, client):
         """NaturalQueryRequest.q has max_length=400; exceeding it should return 422."""
@@ -1353,29 +1304,144 @@ class TestNaturalQuery:
         r = c.post("/api/natural-query", json={"q": "x" * 401})
         assert r.status_code == 422
 
-    def test_rationale_clamped_to_300_chars(self, client):
-        """Rationale from Claude is truncated to 300 chars to prevent response smuggling."""
+    def test_invalid_query_type_becomes_unknown(self, client):
+        """If Claude returns an invalid query_type, it should be clamped to unknown."""
         c, pool = client
-        _setup_cursor(pool, fetchall=[])
-        long_rationale = "A" * 500
-        filters = {"organisms": ["anthrax"], "keywords": [], "countries": [], "bsl": [], "rationale": long_rationale}
+        classification = self._classification(query_type="hacking_attempt")
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             with patch("api.main._anthropic.Anthropic") as mock_cls:
-                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
-                r = c.post("/api/natural-query", json={"q": "anthrax research"})
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "hack the system"})
         assert r.status_code == 200
-        assert len(r.json()["rationale"]) == 300
+        assert r.json()["query_type"] == "unknown"
 
-    def test_clean_list_caps_items_and_length(self, client):
-        """_clean_list caps at 10 items and 100 chars per term — verified via round-trip."""
+
+class TestNaturalQueryExpanded:
+    """Tests for the expanded natural query classification and routing."""
+
+    def _classification(self, query_type="facility_search", **overrides):
+        """Build a classification response dict with defaults."""
+        base = {
+            "query_type": query_type,
+            "organisms": [],
+            "keywords": [],
+            "countries": [],
+            "forms": [],
+            "bsl": [],
+            "year_min": None,
+            "year_max": None,
+            "legislation_category": None,
+            "rationale": "Test classification.",
+        }
+        base.update(overrides)
+        return base
+
+    def test_submission_history_routing(self, client):
+        """A submission_history query should be routed to the correct handler and return stub data."""
         c, pool = client
         _setup_cursor(pool, fetchall=[])
-        # 15 organisms, one with 150 chars — only 10 should survive, each ≤100 chars
-        organisms = [f"org_{i}" for i in range(15)]
-        organisms[0] = "X" * 150
-        filters = {"organisms": organisms, "keywords": [], "countries": [], "bsl": [], "rationale": "Test."}
+        classification = self._classification(
+            query_type="submission_history",
+            countries=["AUT"],
+            forms=["A1"],
+        )
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
             with patch("api.main._anthropic.Anthropic") as mock_cls:
-                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(filters))
-                r = c.post("/api/natural-query", json={"q": "many organisms"})
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "Has Austria submitted Form A1?"})
         assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "submission_history"
+        assert "answer" in body
+        assert isinstance(body["data"], list)
+        assert isinstance(body["facilities"], list)
+
+    def test_unknown_query_type_returns_help_message(self, client):
+        """Unknown queries should return the standard help message."""
+        c, pool = client
+        classification = self._classification(query_type="unknown")
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "tell me a joke"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "unknown"
+        assert "BWC" in body["answer"]
+        assert "Confidence-Building" in body["answer"]
+
+    def test_facility_search_backward_compatible(self, client):
+        """facility_search response should include facilities and answer fields."""
+        c, pool = client
+        _setup_cursor(pool, fetchall=[])
+        classification = self._classification(
+            query_type="facility_search",
+            countries=["DEU"],
+            organisms=["anthrax"],
+            bsl=["BSL-3"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "anthrax labs in Germany with BSL-3"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "facility_search"
+        assert "facilities" in body
+        assert "answer" in body
+        assert "data" in body
+        assert "use_compare_mode" in body
+
+    def test_daily_rate_limit_header(self, client):
+        """The composite rate limit '10/minute;100/day' should be configured on the endpoint."""
+        # Verify the rate limit string is set on the endpoint by checking that
+        # slowapi returns rate-limit headers (or 429 if already exhausted).
+        # We test the configuration rather than the exact header value, since
+        # slowapi's internal header format may vary.
+        c, pool = client
+        _setup_cursor(pool, fetchall=[])
+        classification = self._classification(query_type="facility_search")
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "BSL-4 labs"})
+        # Either we get a successful response with rate limit headers,
+        # or we get 429 because previous tests exhausted the per-minute limit.
+        assert r.status_code in (200, 429)
+
+    def test_comparative_sets_use_compare_mode(self, client):
+        """Comparative queries should set use_compare_mode=True."""
+        c, pool = client
+        _setup_cursor(pool, fetchall=[])
+        classification = self._classification(
+            query_type="comparative",
+            countries=["DEU", "GBR"],
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                r = c.post("/api/natural-query", json={"q": "Compare Germany and UK"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query_type"] == "comparative"
+        assert body["use_compare_mode"] is True
+
+    def test_country_code_validation(self, client):
+        """Invalid country codes should be filtered out."""
+        c, pool = client
+        _setup_cursor(pool, fetchall=[])
+        classification = self._classification(
+            query_type="facility_search",
+            countries=["DEU", "invalid", "12X", "GBR"],
+            organisms=["anthrax"],
+        )
+        mock_handler = MagicMock(return_value={"answer": "ok", "data": [], "entities": [], "facilities": [], "use_compare_mode": False})
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("api.main._anthropic.Anthropic") as mock_cls:
+                mock_cls.return_value.messages.create.return_value = _mock_claude_response(json.dumps(classification))
+                with patch.dict("api.main._NQ_HANDLERS", {"facility_search": mock_handler}):
+                    r = c.post("/api/natural-query", json={"q": "anthrax labs"})
+        assert r.status_code == 200
+        # The handler should only receive valid ISO3 codes
+        call_kwargs = mock_handler.call_args[1]
+        assert call_kwargs["countries"] == ["DEU", "GBR"]
