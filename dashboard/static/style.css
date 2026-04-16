@@ -1381,7 +1381,7 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 .transp-high   { background: #0a3a1a; color: #50c070; }
 .transp-medium { background: #2a2a10; color: #b0a040; }
 .transp-low    { background: #2a1010; color: #c06040; }
-.transp-info   { vertical-align: middle; }
+.transp-info   { vertical-align: middle; margin-left: 4px; }
 
 /* ── Mobile responsive ──────────────────────────────────────────────────── */
 @media (max-width: 767px) {
