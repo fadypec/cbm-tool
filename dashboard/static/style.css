@@ -2007,6 +2007,7 @@ select:focus-visible {
 .nq-status-dot.nothing_to_declare { background: #f39c12; }
 .nq-status-dot.absent { background: #95a5a6; }
 .nq-status-dot.limited { background: #e67e22; }
-.nq-dot-grid th, .nq-dot-grid td { text-align: center; width: 60px; padding: 4px 6px; }
-.nq-dot-grid td:first-child, .nq-dot-grid th:first-child { text-align: left; width: auto; }
+.nq-dot-grid { width: auto; }
+.nq-dot-grid th, .nq-dot-grid td { text-align: center; width: 52px; padding: 4px 8px; }
+.nq-dot-grid td:first-child, .nq-dot-grid th:first-child { text-align: left; width: 52px; padding-right: 16px; }
 .nq-answer { white-space: pre-line; }
