@@ -1072,8 +1072,8 @@ function addLegend() {
 
 function toggleLegend(btn) {
     const body = btn.closest('.map-legend').querySelector('.leg-body');
-    const hidden = body.style.display === 'none';
-    body.style.display = hidden ? '' : 'none';
+    const hidden = getComputedStyle(body).display === 'none';
+    body.style.display = hidden ? 'block' : 'none';
     btn.textContent = hidden ? '▼' : '▲';
     btn.title = hidden ? 'Hide legend' : 'Show legend';
 }
