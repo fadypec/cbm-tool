@@ -1470,14 +1470,34 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     .dsubtab { padding: 8px 14px; }
     .fp-play-btn { width: 36px; height: 36px; }
 
-    /* Legend: show collapsed on mobile, repositioned to avoid filter panel overlap */
+    /* Legend: show collapsed on mobile, bottom-left above filter panel */
     .map-legend {
-        max-width: 150px; font-size: 11px; padding: 6px 10px;
-        position: fixed !important; bottom: auto !important; top: 100px; right: 10px;
+        max-width: 160px; font-size: 11px; padding: 6px 10px;
+        position: fixed !important;
+        top: auto !important; bottom: 52px !important;
+        right: auto !important; left: 10px !important;
         z-index: 1500;
     }
     .map-legend .leg-body { display: none; }
     .map-legend .leg-header { margin-bottom: 0; }
+
+    /* Compliance grid: boost text rendering for mobile dark-on-light anti-aliasing */
+    .compliance-grid th {
+        font-size: 12px !important;
+        color: #fff !important;
+        -webkit-text-stroke: 0.2px currentColor;
+    }
+    .compliance-grid th.yr-col,
+    .compliance-grid td.yr-col {
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        color: #fff !important;
+        -webkit-text-stroke: 0.2px currentColor;
+    }
+    .compliance-legend {
+        font-size: 12px !important;
+        color: #fff !important;
+    }
 }
 
 /* ── Accessibility: focus-visible ring ─────────────────────────────────── */
