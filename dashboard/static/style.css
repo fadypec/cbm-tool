@@ -1481,23 +1481,16 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     .map-legend .leg-body { display: none; }
     .map-legend .leg-header { margin-bottom: 0; }
 
-    /* Compliance grid: boost text rendering for mobile dark-on-light anti-aliasing */
-    .compliance-grid th {
-        font-size: 12px !important;
-        color: #fff !important;
-        -webkit-text-stroke: 0.2px currentColor;
-    }
+    /* Compliance grid: boost font size/weight for mobile readability (theme-neutral) */
+    .compliance-grid th { font-size: 12px !important; }
     .compliance-grid th.yr-col,
-    .compliance-grid td.yr-col {
-        font-size: 12px !important;
-        font-weight: 700 !important;
-        color: #fff !important;
-        -webkit-text-stroke: 0.2px currentColor;
-    }
-    .compliance-legend {
-        font-size: 12px !important;
-        color: #fff !important;
-    }
+    .compliance-grid td.yr-col { font-size: 12px !important; font-weight: 700 !important; }
+    .compliance-legend { font-size: 12px !important; }
+
+    /* Dark theme: white text + stroke for mobile anti-aliasing */
+    [data-theme="dark"] .compliance-grid th,
+    [data-theme="dark"] .compliance-grid td.yr-col { color: #fff !important; -webkit-text-stroke: 0.2px currentColor; }
+    [data-theme="dark"] .compliance-legend { color: #fff !important; }
 }
 
 /* ── Accessibility: focus-visible ring ─────────────────────────────────── */
