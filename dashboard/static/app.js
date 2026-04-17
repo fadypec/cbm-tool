@@ -150,6 +150,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         computeLatestFacilityYears();  // for lapsed declarations feature
         applyFilters();
         addLegend();
+        // On mobile the legend body starts hidden via CSS; sync the toggle button
+        if (window.innerWidth <= 768) {
+            const legBtn = document.querySelector('.leg-toggle');
+            if (legBtn) { legBtn.textContent = '▲'; legBtn.title = 'Show legend'; }
+        }
         loadChoropleth();
 
         // Review queue badge: non-critical, fire-and-forget

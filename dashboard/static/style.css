@@ -352,17 +352,17 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 .country-meta { color: #8090b8; font-size: 11px; margin-top: 3px; }
 
 /* ── Compliance grid (heatmap) ──────────────────────────────────────────── */
-.compliance-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: #b0bee0; margin-bottom: 8px; align-items: center; }
+.compliance-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: #d0d8f0; margin-bottom: 8px; align-items: center; }
 .leg-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 
 .compliance-grid { overflow-x: auto; }
 .compliance-grid table { width: 100%; border-collapse: separate; border-spacing: 3px; table-layout: fixed; font-size: 11px; }
 .compliance-grid col.yr-col  { width: 36px; }
 .compliance-grid col.frm-col { width: calc((100% - 36px) / 7); }
-.compliance-grid th { color: #b0bee0; font-size: 10px; font-weight: 700; padding: 2px 0 4px; text-align: center; letter-spacing: 0.02em; }
-.compliance-grid th.yr-col { text-align: left; color: #a0b0d0; }
+.compliance-grid th { color: #d0d8f0; font-size: 10px; font-weight: 700; padding: 2px 0 4px; text-align: center; letter-spacing: 0.02em; }
+.compliance-grid th.yr-col { text-align: left; color: #c0cce8; }
 .compliance-grid td { padding: 0; height: 18px; border-radius: 3px; }
-.compliance-grid td.yr-col { background: none !important; color: #a0b0d0; font-size: 11px; font-weight: 500; text-align: left; padding-right: 4px; vertical-align: middle; }
+.compliance-grid td.yr-col { background: none !important; color: #c0cce8; font-size: 11px; font-weight: 500; text-align: left; padding-right: 4px; vertical-align: middle; }
 
 .td-sub { background: #1e7e45; }
 .td-ntd {
@@ -1470,8 +1470,11 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     .dsubtab { padding: 8px 14px; }
     .fp-play-btn { width: 36px; height: 36px; }
 
-    /* Legend: hidden on mobile (too much screen real estate) */
-    .map-legend { display: none; }
+    /* Legend: show collapsed on mobile with compact styling */
+    .map-legend { max-width: 150px; font-size: 11px; padding: 6px 10px; }
+    .map-legend .leg-body { display: none; }
+    .map-legend .leg-toggle { content: ''; }
+    .map-legend .leg-header { margin-bottom: 0; }
 }
 
 /* ── Accessibility: focus-visible ring ─────────────────────────────────── */
@@ -1556,10 +1559,11 @@ select:focus-visible {
 [data-theme="dark"] .map-legend {
     background: rgba(15, 17, 28, 0.96);
     box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    color: #c0ccf0;
 }
-[data-theme="dark"] .map-legend .leg-title { color: #8090b0; }
-[data-theme="dark"] .leg-header-title      { color: #8090b0; }
-[data-theme="dark"] .leg-toggle            { color: #606880; }
+[data-theme="dark"] .map-legend .leg-title { color: #9aaccc; }
+[data-theme="dark"] .leg-header-title      { color: #9aaccc; }
+[data-theme="dark"] .leg-toggle            { color: #8090b0; }
 [data-theme="dark"] .leg-toggle:hover      { color: #c0ccf0; }
 [data-theme="dark"] .legend-dot            { border-color: rgba(255,255,255,0.12); }
 [data-theme="dark"] .legend-sq             { border-color: rgba(255,255,255,0.12); }
@@ -1664,6 +1668,9 @@ select:focus-visible {
 
 /* ── Compliance grid ────────────────────────────────────────────────────── */
 [data-theme="light"] .compliance-legend   { color: #6070a0; }
+[data-theme="light"] .compliance-grid th  { color: #5060a0; }
+[data-theme="light"] .compliance-grid th.yr-col  { color: #5060a0; }
+[data-theme="light"] .compliance-grid td.yr-col  { color: #5060a0; }
 [data-theme="light"] .td-abs              { background: #d8deee; }
 
 /* ── Transparency badges (sidebar) ─────────────────────────────────────── */
