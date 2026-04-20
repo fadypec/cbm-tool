@@ -75,6 +75,24 @@ let _lapsedIds = new Set();
 // Transparency scores fetched from /api/countries/transparency
 let _transparencyMap = {};  // iso3 → transparency_score
 
+/**
+ * Show a Bootstrap modal with proper focus management (WCAG 2.4.3).
+ * Focuses the first interactive element inside; restores focus to trigger on close.
+ * @param {bootstrap.Modal} modal - Bootstrap Modal instance
+ */
+function _showModalWithFocus(modal) {
+    const trigger = document.activeElement;
+    const el = modal._element;
+    el.addEventListener('shown.bs.modal', () => {
+        const first = el.querySelector('input:not([type="hidden"]), select, button:not([data-bs-dismiss]), [tabindex="0"]');
+        if (first) first.focus();
+    }, { once: true });
+    el.addEventListener('hidden.bs.modal', () => {
+        if (trigger && typeof trigger.focus === 'function') trigger.focus();
+    }, { once: true });
+    modal.show();
+}
+
 // ── Bootstrap ──────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -92,6 +110,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     initStaticListeners();
     initEventDelegation();
     restoreFromHash();
+
+    // Show skeleton loading in the country list while data fetches
+    const _countryListEl = document.getElementById('country-list');
+    if (_countryListEl) _showSkeleton(_countryListEl, 8);
 
     // Theme segmented control in About modal
     const themeDark  = document.getElementById('theme-btn-dark');
@@ -115,18 +137,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     try {
-        const [stats, countries, a1, a2, vaccines, compliance, transparency, membershipResp] = await Promise.all([
+        const _INIT_DEFAULTS = [
+            {}, [], { type: 'FeatureCollection', features: [] },
+            { type: 'FeatureCollection', features: [] },
+            { type: 'FeatureCollection', features: [] },
+            {}, [], {}
+        ];
+        const results = await Promise.allSettled([
             api('/api/stats'),
             api('/api/countries'),
             api('/api/map/facilities'),
             api('/api/map/defence'),
             api('/api/map/vaccines'),
             api('/api/map/compliance'),
-            // Transparency index loaded in parallel; non-critical so errors are swallowed below
             api('/api/countries/transparency').catch(() => []),
-            // BWC membership — must resolve before loadChoropleth(); errors degrade gracefully
             api('/api/bwc-membership').catch(() => ({})),
         ]);
+        const [stats, countries, a1, a2, vaccines, compliance, transparency, membershipResp] =
+            results.map((r, i) => {
+                if (r.status === 'fulfilled') return r.value;
+                console.error(`Init fetch #${i} failed:`, r.reason);
+                return _INIT_DEFAULTS[i];
+            });
         if (membershipResp && membershipResp.membership) {
             bwcMembership = membershipResp.membership;
         }
@@ -142,9 +174,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         _countriesData = countries;
         renderCountryList(countries);
 
-        DATA.A1 = a1;
-        DATA.A2 = a2;
-        DATA.G  = vaccines;
+        /** Ensure GeoJSON has a valid features array; return safe default if not. */
+        function _validateGeoJSON(data) {
+            if (!data || typeof data !== 'object') return { type: 'FeatureCollection', features: [] };
+            if (!Array.isArray(data.features)) return { ...data, features: [] };
+            return data;
+        }
+        DATA.A1 = _validateGeoJSON(a1);
+        DATA.A2 = _validateGeoJSON(a2);
+        DATA.G  = _validateGeoJSON(vaccines);
 
         computeLatestYears();
         computeLatestFacilityYears();  // for lapsed declarations feature
@@ -183,16 +221,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // ── API ────────────────────────────────────────────────────────────────────
 
-async function api(url) {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);
-    return r.json();
+/**
+ * Fetch JSON from an API endpoint with timeout and error classification.
+ * @param {string} url - API endpoint path
+ * @param {object} [opts] - fetch options; supports extra `timeout` (ms, default 15000)
+ * @returns {Promise<any>} parsed JSON response
+ */
+async function api(url, opts = {}) {
+    const timeout = opts.timeout || 15000;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeout);
+    try {
+        const r = await fetch(url, { ...opts, signal: ctrl.signal });
+        if (!r.ok) {
+            let detail = `${r.status} ${r.statusText}`;
+            try { const d = await r.json(); if (d.detail) detail = d.detail; } catch { /* non-JSON error body */ }
+            const err = new Error(`${detail} — ${url}`);
+            err.status = r.status;
+            throw err;
+        }
+        return await r.json();
+    } catch (e) {
+        if (e.name === 'AbortError') throw new Error(`Request timeout: ${url}`);
+        throw e;
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 // ── Stats bar ──────────────────────────────────────────────────────────────
 
 let _stats = null; // kept so updateStatsBar() can re-render after layer toggles
 
+/** Render global statistics in the stats bar. */
 function renderStats(s) {
     _stats = s;
     document.getElementById('stats-bar').innerHTML =
@@ -257,6 +318,7 @@ function _swapTile(theme) {
 
 // ── Map ────────────────────────────────────────────────────────────────────
 
+/** Initialize Leaflet map, tile layers, and marker cluster groups. */
 function initMap() {
     map = L.map('map', {
         zoomControl: false,
@@ -420,6 +482,7 @@ function matchesFilter(layer, feature) {
     return true;
 }
 
+/** Apply current filter state to map layers and update visible markers. */
 function applyFilters() {
     // Recompute lapsed set before any layer is processed
     if (STATE.showLapsed && DATA.A1) {
@@ -817,6 +880,33 @@ function exportCSV() {
     URL.revokeObjectURL(a.href);
 }
 
+// ── JSON Export ─────────────────────────────────────────────────────────────
+
+/** Export currently filtered map features as a JSON file. */
+function exportJSON() {
+    const features = [];
+    const activeLayers = [];
+    for (const layer of ['A1', 'A2', 'G']) {
+        if (!STATE.layers[layer] || !DATA[layer]) continue;
+        activeLayers.push(layer);
+        DATA[layer].features
+            .filter(f => matchesFilter(layer, f))
+            .forEach(f => features.push(f.properties));
+    }
+    if (!features.length) return;
+    const blob = new Blob([JSON.stringify(features, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const layerStr = activeLayers.join('-');
+    const yearStr  = STATE.year ? '-' + STATE.year : '';
+    a.download = `cbm-${layerStr}${yearStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
 // ── URL Hash (permalink) ───────────────────────────────────────────────────
 
 function updateHash() {
@@ -967,6 +1057,7 @@ async function onChoroFormChange() {
     }
 }
 
+/** Load/update the choropleth background layer on the map. */
 async function loadChoropleth() {
     try {
         if (!_worldGeoJSON) {
@@ -1070,12 +1161,15 @@ function addLegend() {
     new LegendControl({ position: 'bottomright' }).addTo(map);
 }
 
+/** Toggle legend body visibility and update ARIA state. */
 function toggleLegend(btn) {
     const body = btn.closest('.map-legend').querySelector('.leg-body');
     const hidden = getComputedStyle(body).display === 'none';
     body.style.display = hidden ? 'block' : 'none';
     btn.textContent = hidden ? '▼' : '▲';
     btn.title = hidden ? 'Hide legend' : 'Show legend';
+    btn.setAttribute('aria-expanded', String(hidden));
+    btn.setAttribute('aria-label', hidden ? 'Collapse legend' : 'Expand legend');
 }
 
 // ── Sidebar panel switcher ─────────────────────────────────────────────────
@@ -1116,6 +1210,7 @@ function transparencyBadge(score) {
 
 // ── Country detail ─────────────────────────────────────────────────────────
 
+/** Load and display detail panel for the selected country. */
 async function selectCountry(iso3) {
     ensureSidebarOpen();
     _currentIso3 = iso3;
@@ -1124,7 +1219,9 @@ async function selectCountry(iso3) {
     );
     showPanel('detail');
     document.getElementById('detail-title').textContent = iso3;
-    document.getElementById('detail-loading').style.display = 'block';
+    const detailLoading = document.getElementById('detail-loading');
+    detailLoading.style.display = 'block';
+    _showSkeleton(detailLoading, 5);
     document.getElementById('detail-content').style.display = 'none';
 
     try {
@@ -1186,6 +1283,7 @@ function renderCountryDetail(data) {
     switchDetailTab('compliance');
 }
 
+/** Switch the active tab in the country detail panel. */
 function switchDetailTab(name) {
     document.querySelectorAll('.dtab').forEach(b => {
         const isActive = b.dataset.tab === name;
@@ -1358,7 +1456,7 @@ async function showDefenceEntityModal(entityId) {
     map.closePopup();
     document.getElementById('modal-title').textContent = 'Loading…';
     document.getElementById('modal-body').innerHTML = '<div class="text-center py-4 text-muted">Loading…</div>';
-    entityModal.show();
+    _showModalWithFocus(entityModal);
     try {
         const data = await api(`/api/entity/defence/${entityId}`);
         renderDefenceEntityModal(data);
@@ -1442,7 +1540,7 @@ async function showVaccineEntityModal(entityId) {
     map.closePopup();
     document.getElementById('modal-title').textContent = 'Loading…';
     document.getElementById('modal-body').innerHTML = '<div class="text-center py-4 text-muted">Loading…</div>';
-    entityModal.show();
+    _showModalWithFocus(entityModal);
     try {
         const data = await api(`/api/entity/vaccine/${entityId}`);
         renderVaccineEntityModal(data);
@@ -1585,11 +1683,12 @@ async function loadHistoryTab(iso3) {
 
 // ── Entity modal ───────────────────────────────────────────────────────────
 
+/** Open modal with full history for a canonical facility entity. */
 async function showEntityModal(entityId) {
     map.closePopup();
     document.getElementById('modal-title').textContent = 'Loading…';
     document.getElementById('modal-body').innerHTML = '<div class="text-center py-4 text-muted">Loading…</div>';
-    entityModal.show();
+    _showModalWithFocus(entityModal);
 
     try {
         const data = await api(`/api/entity/${entityId}`);
@@ -1793,7 +1892,7 @@ function showGlobalTable() {
         return { ...c, a1_rate: cr.a1_rate != null ? +cr.a1_rate : null };
     });
     renderGlobalTable(rows, _tableSort.col, _tableSort.dir);
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('global-table-modal')).show();
+    _showModalWithFocus(bootstrap.Modal.getOrCreateInstance(document.getElementById('global-table-modal')));
 }
 
 function sortGlobalTable(col) {
@@ -1819,7 +1918,7 @@ function renderGlobalTable(rows, sortCol, sortDir) {
 
     const arrow = col => col !== sortCol ? '' : (sortDir === 'asc' ? ' ▲' : ' ▼');
     const th = (col, label) =>
-        `<th class="gt-th-sort${col === sortCol ? ' gt-sorted' : ''}" data-action="sort-global-table" data-col="${col}">${label}${arrow(col)}</th>`;
+        `<th scope="col" class="gt-th-sort${col === sortCol ? ' gt-sorted' : ''}" data-action="sort-global-table" data-col="${col}">${label}${arrow(col)}</th>`;
 
     let html = `<table class="gt-table">
         <thead><tr>
@@ -1832,8 +1931,12 @@ function renderGlobalTable(rows, sortCol, sortDir) {
         </tr></thead><tbody>`;
 
     sorted.forEach(c => {
+        // If rate is 0, use dark text and a border to ensure visibility on light backgrounds
+        const rateBadgeStyle = c.a1_rate != null
+            ? `background:${choroColor(c.a1_rate)};${c.a1_rate <= 0.2 ? 'color:#555;' : ''}${c.a1_rate === 0 ? 'border:1px solid #ccc;' : ''}`
+            : '';
         const rate = c.a1_rate != null
-            ? `<span class="gt-rate" style="background:${choroColor(c.a1_rate)};${c.a1_rate <= 0.2 ? 'color:#555' : ''}">${Math.round(c.a1_rate * 100)}%</span>`
+            ? `<span class="gt-rate" style="${rateBadgeStyle}">${Math.round(c.a1_rate * 100)}%</span>`
             : `<span class="gt-rate gt-rate-none">—</span>`;
         const bsl4 = c.bsl4_count
             ? `<strong style="color:#c0392b">${c.bsl4_count}</strong>`
@@ -1880,7 +1983,7 @@ async function showTrends() {
     _trendsPathogens   = null;
     _trendsChanges     = null;
     _trendsCapacity    = null;
-    modal.show();
+    _showModalWithFocus(modal);
     loadTrendsChart();
 }
 
@@ -2171,7 +2274,7 @@ async function refreshReviewBadge() {
 /** Open the review queue modal and load current flags. */
 function showReviewQueue() {
     const modal = new bootstrap.Modal(document.getElementById('review-modal'));
-    modal.show();
+    _showModalWithFocus(modal);
     loadReviewQueue();
 }
 
@@ -2419,7 +2522,7 @@ function showAIQuery(initialQuery = '') {
             document.getElementById('ai-query-results').innerHTML  = '';
         }
     }
-    modal.show();
+    _showModalWithFocus(modal);
     // Auto-run if a query was passed (e.g. from the unified search bar)
     if (initialQuery) setTimeout(runAIQuery, 350);
 }
@@ -2500,7 +2603,7 @@ function _renderLegislationTable(rows) {
             html += `<td>${has ? '\u2713' : '\u2014'}</td>`;
         }
         const laws = r.key_laws || [];
-        html += `<td>${laws.slice(0, 2).map(esc).join('; ') || '\u2014'}</td></tr>`;
+        html += `<td>${laws.slice(0, 3).map(esc).join('; ') || '\u2014'}</td></tr>`;
     }
     html += '</tbody></table>';
     return html;
@@ -2610,9 +2713,18 @@ async function runAIQuery() {
         }
 
         resultsEl.innerHTML = html;
+
+        // Announce result count for screen readers
+        const statusEl = document.getElementById('search-status');
+        if (statusEl) {
+            const count = facilities.length || (entities.length ? entities.length : 0);
+            statusEl.textContent = count ? `${count} result${count > 1 ? 's' : ''} found` : 'No results found';
+        }
     } catch (e) {
         const hint = e.message.includes('503') ? ' — ANTHROPIC_API_KEY not configured on this server' : '';
         resultsEl.innerHTML = `<div class="text-danger">Search failed: ${esc(e.message)}${hint}</div>`;
+        const statusEl = document.getElementById('search-status');
+        if (statusEl) statusEl.textContent = 'Search failed';
     } finally {
         if (btn) btn.disabled = false;
     }
@@ -2983,7 +3095,7 @@ function showCompare() {
     }
 
     _compareModal = bootstrap.Modal.getOrCreateInstance(modalEl);
-    _compareModal.show();
+    _showModalWithFocus(_compareModal);
 }
 
 async function onCompareSelect() {
@@ -3448,7 +3560,7 @@ function initEventDelegation() {
                     if (selA && isos[0]) selA.value = isos[0];
                     if (selB && isos[1]) selB.value = isos[1];
                     const compareModal = bootstrap.Modal.getOrCreateInstance(document.getElementById('compare-modal'));
-                    compareModal?.show();
+                    if (compareModal) _showModalWithFocus(compareModal);
                     onCompareSelect();
                 }, 300);
                 break;
@@ -3457,6 +3569,9 @@ function initEventDelegation() {
             // ── Actions / exports ──
             case 'export-csv':
                 exportCSV();
+                break;
+            case 'export-json':
+                exportJSON();
                 break;
             case 'copy-permalink':
                 copyPermalink();
@@ -3549,6 +3664,49 @@ function initEventDelegation() {
         }
     });
 }
+
+// ── Skeleton loading helper ────────────────────────────────────────────────
+
+/** Show skeleton placeholders in a container until real content loads. */
+function _showSkeleton(container, count = 3) {
+    container.innerHTML = Array.from({ length: count },
+        () => '<div class="skeleton" style="height:18px;margin:8px 12px;width:' + (60 + Math.random() * 30) + '%"></div>'
+    ).join('');
+}
+
+// ── Connection status monitor ─────────────────────────────────────────────
+
+(function initConnStatus() {
+    const dot = document.getElementById('conn-status');
+    if (!dot) return;
+
+    /** Update dot based on online/offline state. */
+    function update() {
+        dot.classList.toggle('offline', !navigator.onLine);
+        dot.title = navigator.onLine ? 'Connected' : 'Offline';
+    }
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    update();
+
+    /** Periodically ping health endpoint to detect slow connections. */
+    async function ping() {
+        if (!navigator.onLine) return;
+        const t0 = performance.now();
+        try {
+            await fetch('/health', { method: 'HEAD', cache: 'no-store' });
+            const ms = performance.now() - t0;
+            dot.classList.toggle('slow', ms > 2000);
+            dot.title = ms > 2000 ? `Slow connection (${Math.round(ms)}ms)` : 'Connected';
+            dot.classList.remove('offline');
+        } catch {
+            dot.classList.add('offline');
+            dot.title = 'Connection error';
+        }
+    }
+    setInterval(ping, 30000);
+    ping();
+})();
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 

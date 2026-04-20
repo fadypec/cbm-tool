@@ -23,12 +23,14 @@ import csv
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, field_validator
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -44,6 +46,42 @@ log = logging.getLogger(__name__)
 PROJECT_ROOT  = Path(__file__).resolve().parent.parent
 OUTPUT_DIR    = PROJECT_ROOT / "data" / "output"
 CATALOGUE_PATH = PROJECT_ROOT / "data" / "catalogue.json"
+
+# ── Catalogue validation ──────────────────────────────────────────────────────
+
+
+class CatalogueEntry(BaseModel):
+    """Validated catalogue entry — catches missing/malformed fields early.
+
+    Uses extra="allow" because the catalogue accumulates optional metadata
+    fields over time (ocr_engine, page_count, etc.) that are not needed by
+    the DB loader but should not cause validation failures.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    country: str
+    country_iso3: str
+    year: int
+    language: str | None = None
+    source_url: str | None = None
+    downloaded: bool = False
+    is_amendment: bool = False
+
+    @field_validator("country_iso3")
+    @classmethod
+    def validate_iso3(cls, v: str) -> str:
+        if not re.match(r"^[A-Z]{3}$", v):
+            raise ValueError(f"Invalid ISO3 code: {v}")
+        return v
+
+    @field_validator("year")
+    @classmethod
+    def validate_year(cls, v: int) -> int:
+        if not (1980 <= v <= 2099):
+            raise ValueError(f"Year out of range: {v}")
+        return v
+
 
 # ── Type coercions ────────────────────────────────────────────────────────────
 
@@ -547,9 +585,21 @@ def main() -> None:
         log.error("Is the database running?  Try: docker compose up -d")
         sys.exit(1)
 
-    catalogue: list[dict] = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))
-    log.info("Loaded catalogue: %d entries", len(catalogue))
+    raw_catalogue = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))
+    catalogue: list[dict] = []
+    for i, entry in enumerate(raw_catalogue):
+        try:
+            validated = CatalogueEntry(**entry)
+            catalogue.append(validated.model_dump())
+        except Exception as exc:
+            log.warning("Catalogue entry %d failed validation: %s — skipping", i, exc)
+    log.info("Loaded catalogue: %d entries (%d skipped)",
+             len(catalogue), len(raw_catalogue) - len(catalogue))
 
+    # Transaction: the entire truncate + reload is atomic — any failure
+    # rolls back all changes so the database is never left half-loaded.
+    # psycopg2's `with conn:` context manager commits on success and rolls
+    # back on exception, guaranteeing all-or-nothing semantics.
     with conn:
         with conn.cursor() as cur:
             if args.table:

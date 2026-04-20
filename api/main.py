@@ -20,8 +20,13 @@ import json
 import logging
 import os
 import re
+import secrets
+import threading
+import time as _time
+import uuid
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from typing import Any
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,13 +34,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger("cbm-api")
 
+
+class _JSONFormatter(logging.Formatter):
+    """Structured JSON log output for production log aggregators."""
+    def format(self, record: logging.LogRecord) -> str:
+        obj = {
+            "ts": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "msg": record.getMessage(),
+            "logger": record.name,
+            "module": record.module,
+            "line": record.lineno,
+        }
+        if hasattr(record, "trace_id"):
+            obj["trace_id"] = record.trace_id
+        if record.exc_info and record.exc_info[0]:
+            obj["exception"] = self.formatException(record.exc_info)
+        return json.dumps(obj, default=str)
+
+
+if os.getenv("ENVIRONMENT") != "dev":
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(_JSONFormatter())
+    logger.handlers.clear()
+    logger.addHandler(_handler)
+
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 from dotenv import load_dotenv
 import anthropic as _anthropic
 
-from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Header, Path as FastAPIPath, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -70,7 +100,8 @@ def require_review_key(x_review_key: str | None = Header(default=None)) -> None:
     Fails closed — if REVIEW_API_KEY is not configured, the endpoint is disabled."""
     if not REVIEW_API_KEY:
         raise HTTPException(status_code=503, detail="Review queue not configured on this server")
-    if x_review_key != REVIEW_API_KEY:
+    # Constant-time comparison to prevent timing attacks on API key
+    if not (x_review_key and secrets.compare_digest(x_review_key, REVIEW_API_KEY)):
         logger.warning("Review endpoint called with invalid key")
         raise HTTPException(status_code=401, detail="Invalid or missing X-Review-Key")
 
@@ -83,8 +114,13 @@ _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _pool
-    _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, DB_URL)
-    logger.info("DB pool initialised (1–10 connections)")
+    # Allow overriding pool bounds via env vars for tuning under load
+    _pool_min = int(os.getenv("DB_POOL_MIN", "1"))
+    _pool_max = int(os.getenv("DB_POOL_MAX", "10"))
+    _pool = psycopg2.pool.ThreadedConnectionPool(_pool_min, _pool_max, DB_URL)
+    logger.info("DB pool initialised (%d–%d connections)", _pool_min, _pool_max)
+    if DB_URL and "sslmode" not in DB_URL and "localhost" not in DB_URL:
+        logger.warning("DATABASE_URL missing sslmode parameter — connections may not be encrypted")
     yield
     if _pool:
         _pool.closeall()
@@ -141,6 +177,65 @@ class _Enc(json.JSONEncoder):
 def _json(data) -> JSONResponse:
     return JSONResponse(content=json.loads(json.dumps(data, cls=_Enc)))
 
+
+# ── In-memory cache ──────────────────────────────────────────────────────────
+
+
+class _Cache:
+    """Simple TTL cache for expensive read-only queries."""
+
+    def __init__(self, ttl: int = 3600):
+        self._store: dict[str, tuple[float, Any]] = {}
+        self._ttl = ttl
+
+    def get(self, key: str) -> Any | None:
+        entry = self._store.get(key)
+        if entry and _time.time() - entry[0] < self._ttl:
+            return entry[1]
+        return None
+
+    def set(self, key: str, value: Any) -> None:
+        self._store[key] = (_time.time(), value)
+
+    def clear(self) -> None:
+        self._store.clear()
+
+
+_cache = _Cache(ttl=3600)
+
+# ── In-memory metrics ─────────────────────────────────────────────────────────
+
+
+class _Metrics:
+    """Lightweight in-memory request metrics (no external dependencies)."""
+    def __init__(self):
+        self.request_count: int = 0
+        self.error_count: int = 0
+        self.latency_sum: float = 0.0
+        self.latency_max: float = 0.0
+        self._lock = threading.Lock()
+
+    def record(self, duration: float, status: int) -> None:
+        with self._lock:
+            self.request_count += 1
+            self.latency_sum += duration
+            if duration > self.latency_max:
+                self.latency_max = duration
+            if status >= 400:
+                self.error_count += 1
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            avg = self.latency_sum / self.request_count if self.request_count else 0
+            return {
+                "requests_total": self.request_count,
+                "errors_total": self.error_count,
+                "latency_avg_ms": round(avg * 1000, 1),
+                "latency_max_ms": round(self.latency_max * 1000, 1),
+            }
+
+
+_metrics = _Metrics()
 
 # ── App ──────────────────────────────────────────────────────────────────────
 
@@ -209,6 +304,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # All inline event handlers have been migrated to addEventListener /
         # data-action delegation, so 'unsafe-inline' is only needed for styles
         # (Bootstrap utility classes inject inline styles).
+        # Note: 'unsafe-inline' in style-src is required by Bootstrap utility classes
+        # (e.g. inline style attributes). A nonce-based CSP is a future improvement.
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://cloud.umami.is; "
@@ -218,6 +315,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "font-src 'self' https://cdn.jsdelivr.net; "
             "frame-ancestors 'none';"
         )
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
 
         # JS and CSS change on every deploy, so use no-cache (browser revalidates
         # via ETag/Last-Modified — fast 304 on hit, fresh file on deploy).
@@ -239,6 +339,26 @@ app.add_middleware(SecurityHeadersMiddleware)
 # 14 MB countries.geojson, which compresses to ~3 MB.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
+
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    """Attach a short trace ID to every request for log correlation."""
+    trace_id = request.headers.get("X-Request-ID", uuid.uuid4().hex[:8])
+    request.state.trace_id = trace_id
+    response = await call_next(request)
+    response.headers["X-Trace-ID"] = trace_id
+    return response
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    """Record request count, error count, and latency for /metrics."""
+    start = _time.time()
+    response = await call_next(request)
+    _metrics.record(_time.time() - start, response.status_code)
+    return response
+
+
 app.mount("/static", StaticFiles(directory=DASHBOARD_DIR / "static"), name="static")
 
 
@@ -258,6 +378,12 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/metrics", include_in_schema=False)
+def app_metrics():
+    """Lightweight request metrics (no Prometheus dependency)."""
+    return _json(_metrics.snapshot())
+
+
 @app.api_route("/ready", methods=["GET", "HEAD"], include_in_schema=False)
 def ready():
     """Readiness probe — verifies DB pool can serve a connection."""
@@ -265,7 +391,8 @@ def ready():
         with cursor() as cur:
             cur.execute("SELECT 1")
         return {"status": "ready"}
-    except Exception:
+    except Exception as exc:
+        logger.warning("Readiness check failed: %s", exc)
         return JSONResponse({"status": "unavailable"}, status_code=503)
 
 
@@ -300,6 +427,17 @@ _BWC_MEMBERSHIP: dict[str, str] = {
 }
 
 
+_ISO3_RE = re.compile(r"^[A-Z]{3}$")
+
+
+def _validate_iso3(iso3: str) -> str:
+    """Uppercase and validate ISO-3166-1 alpha-3 code."""
+    iso3 = iso3.upper()
+    if not _ISO3_RE.match(iso3):
+        raise HTTPException(status_code=400, detail="Invalid country code")
+    return iso3
+
+
 @app.get("/api/bwc-membership", summary="BWC membership status by ISO3")
 @limiter.limit("60/minute")
 def api_bwc_membership(request: Request):
@@ -316,27 +454,36 @@ def api_bwc_membership(request: Request):
 @app.get("/api/stats", summary="Global summary statistics")
 @limiter.limit("60/minute")
 def api_stats(request: Request):
-    with cursor() as cur:
-        cur.execute("""
-            SELECT
-                (SELECT count(*)             FROM documents WHERE NOT is_amendment)                AS total_submissions,
-                (SELECT count(DISTINCT country_iso3) FROM documents WHERE NOT is_amendment)        AS total_countries,
-                (SELECT count(*)             FROM facility_years)                                   AS total_facility_years,
-                (SELECT count(*)             FROM facilities)                                       AS total_unique_facilities,
-                (SELECT count(*)             FROM facility_years WHERE geom IS NOT NULL)            AS geocoded_facility_years,
-                (SELECT count(*)             FROM vaccine_facility_years)                           AS vaccine_facility_years,
-                (SELECT count(*)             FROM defence_facilities)                               AS defence_facility_years,
-                (SELECT count(*)             FROM vaccine_facilities)                               AS total_unique_vaccine,
-                (SELECT count(DISTINCT canonical_defence_facility_id)
-                 FROM   defence_facilities
-                 WHERE  canonical_defence_facility_id IS NOT NULL)                                  AS total_unique_defence,
-                (SELECT min(year)            FROM documents WHERE NOT is_amendment)                 AS year_min,
-                (SELECT max(year)            FROM documents WHERE NOT is_amendment)                 AS year_max
-        """)
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=503, detail="Statistics query returned no data")
-        return _json(dict(row))
+    cached = _cache.get("stats")
+    if cached is not None:
+        return _json(cached)
+    try:
+        with cursor() as cur:
+            cur.execute("""
+                SELECT
+                    (SELECT count(*)             FROM documents WHERE NOT is_amendment)                AS total_submissions,
+                    (SELECT count(DISTINCT country_iso3) FROM documents WHERE NOT is_amendment)        AS total_countries,
+                    (SELECT count(*)             FROM facility_years)                                   AS total_facility_years,
+                    (SELECT count(*)             FROM facilities)                                       AS total_unique_facilities,
+                    (SELECT count(*)             FROM facility_years WHERE geom IS NOT NULL)            AS geocoded_facility_years,
+                    (SELECT count(*)             FROM vaccine_facility_years)                           AS vaccine_facility_years,
+                    (SELECT count(*)             FROM defence_facilities)                               AS defence_facility_years,
+                    (SELECT count(*)             FROM vaccine_facilities)                               AS total_unique_vaccine,
+                    (SELECT count(DISTINCT canonical_defence_facility_id)
+                     FROM   defence_facilities
+                     WHERE  canonical_defence_facility_id IS NOT NULL)                                  AS total_unique_defence,
+                    (SELECT min(year)            FROM documents WHERE NOT is_amendment)                 AS year_min,
+                    (SELECT max(year)            FROM documents WHERE NOT is_amendment)                 AS year_max
+            """)
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=503, detail="Statistics query returned no data")
+            result = dict(row)
+    except psycopg2.Error as exc:
+        logger.error("Database error in /api/stats: %s", exc)
+        raise HTTPException(status_code=500, detail="Database error") from None
+    _cache.set("stats", result)
+    return _json(result)
 
 
 # ── /api/countries ───────────────────────────────────────────────────────────
@@ -344,27 +491,36 @@ def api_stats(request: Request):
 
 @app.get("/api/countries", summary="All submitting countries with summary stats")
 def api_countries():
-    with cursor() as cur:
-        cur.execute("""
-            SELECT
-                d.country_iso3,
-                MAX(d.country_name)                                                          AS country_name,
-                COUNT(DISTINCT d.year)                                                       AS submission_count,
-                MAX(d.year)                                                                  AS latest_year,
-                COUNT(DISTINCT fy.canonical_facility_id)                                     AS facility_count,
-                COUNT(DISTINCT CASE WHEN fy.has_bsl4 THEN fy.canonical_facility_id END)     AS bsl4_count,
-                ROUND(
-                    COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.year END)::numeric
-                    / NULLIF(COUNT(DISTINCT d.year), 0), 3
-                )                                                                            AS a1_rate
-            FROM documents d
-            LEFT JOIN facility_years fy  ON fy.document_id = d.id
-            LEFT JOIN form_compliance fc ON fc.document_id = d.id AND fc.form = 'A1'
-            WHERE NOT d.is_amendment
-            GROUP BY d.country_iso3
-            ORDER BY MAX(d.country_name)
-        """)
-        return _json([dict(r) for r in cur.fetchall()])
+    cached = _cache.get("countries")
+    if cached is not None:
+        return _json(cached)
+    try:
+        with cursor() as cur:
+            cur.execute("""
+                SELECT
+                    d.country_iso3,
+                    MAX(d.country_name)                                                          AS country_name,
+                    COUNT(DISTINCT d.year)                                                       AS submission_count,
+                    MAX(d.year)                                                                  AS latest_year,
+                    COUNT(DISTINCT fy.canonical_facility_id)                                     AS facility_count,
+                    COUNT(DISTINCT CASE WHEN fy.has_bsl4 THEN fy.canonical_facility_id END)     AS bsl4_count,
+                    ROUND(
+                        COUNT(DISTINCT CASE WHEN fc.status = 'substantive' THEN d.year END)::numeric
+                        / NULLIF(COUNT(DISTINCT d.year), 0), 3
+                    )                                                                            AS a1_rate
+                FROM documents d
+                LEFT JOIN facility_years fy  ON fy.document_id = d.id
+                LEFT JOIN form_compliance fc ON fc.document_id = d.id AND fc.form = 'A1'
+                WHERE NOT d.is_amendment
+                GROUP BY d.country_iso3
+                ORDER BY MAX(d.country_name)
+            """)
+            result = [dict(r) for r in cur.fetchall()]
+    except psycopg2.Error as exc:
+        logger.error("Database error in /api/countries: %s", exc)
+        raise HTTPException(status_code=500, detail="Database error") from None
+    _cache.set("countries", result)
+    return _json(result)
 
 
 # ── /api/country/{iso3} ───────────────────────────────────────────────────────
@@ -372,47 +528,51 @@ def api_countries():
 
 @app.get("/api/country/{iso3}", summary="Submission history and facility list for one country")
 def api_country(iso3: str):
-    iso3 = iso3.upper()
-    with cursor() as cur:
-        cur.execute(
-            "SELECT DISTINCT country_name FROM documents WHERE country_iso3 = %s AND country_name IS NOT NULL LIMIT 1",
-            (iso3,),
-        )
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail=f"Country '{iso3}' not found")
-        country_name = row["country_name"]
+    iso3 = _validate_iso3(iso3)
+    try:
+        with cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT country_name FROM documents WHERE country_iso3 = %s AND country_name IS NOT NULL LIMIT 1",
+                (iso3,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail=f"Country '{iso3}' not found")
+            country_name = row["country_name"]
 
-        cur.execute(
-            """
-            SELECT d.year, fc.form, fc.status
-            FROM form_compliance fc
-            JOIN documents d ON d.id = fc.document_id
-            WHERE d.country_iso3 = %s AND NOT d.is_amendment
-            ORDER BY d.year DESC, fc.form
-        """,
-            (iso3,),
-        )
-        compliance = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT d.year, fc.form, fc.status
+                FROM form_compliance fc
+                JOIN documents d ON d.id = fc.document_id
+                WHERE d.country_iso3 = %s AND NOT d.is_amendment
+                ORDER BY d.year DESC, fc.form
+            """,
+                (iso3,),
+            )
+            compliance = [dict(r) for r in cur.fetchall()]
 
-        # FEATURE 7: Add latest_source_url via subquery on facility_years → documents
-        cur.execute(
-            """
-            SELECT f.canonical_facility_id, f.canonical_name,
-                   f.latest_containment, f.years_declared, f.latest_area_m2,
-                   (SELECT d.source_url
-                    FROM   facility_years fy
-                    JOIN   documents d ON d.id = fy.document_id
-                    WHERE  fy.canonical_facility_id = f.canonical_facility_id
-                    ORDER  BY fy.year DESC NULLS LAST
-                    LIMIT  1) AS latest_source_url
-            FROM facilities f
-            WHERE f.country_iso3 = %s
-            ORDER BY f.canonical_name NULLS LAST
-        """,
-            (iso3,),
-        )
-        facilities = [dict(r) for r in cur.fetchall()]
+            # FEATURE 7: Add latest_source_url via subquery on facility_years → documents
+            cur.execute(
+                """
+                SELECT f.canonical_facility_id, f.canonical_name,
+                       f.latest_containment, f.years_declared, f.latest_area_m2,
+                       (SELECT d.source_url
+                        FROM   facility_years fy
+                        JOIN   documents d ON d.id = fy.document_id
+                        WHERE  fy.canonical_facility_id = f.canonical_facility_id
+                        ORDER  BY fy.year DESC NULLS LAST
+                        LIMIT  1) AS latest_source_url
+                FROM facilities f
+                WHERE f.country_iso3 = %s
+                ORDER BY f.canonical_name NULLS LAST
+            """,
+                (iso3,),
+            )
+            facilities = [dict(r) for r in cur.fetchall()]
+    except psycopg2.Error as exc:
+        logger.error("Database error in /api/country/%s: %s", iso3, exc)
+        raise HTTPException(status_code=500, detail="Database error") from None
 
     return _json(
         {
@@ -429,7 +589,7 @@ def api_country(iso3: str):
 
 @app.get("/api/country/{iso3}/defence", summary="Defence programmes and facilities for one country")
 def api_country_defence(iso3: str):
-    iso3 = iso3.upper()
+    iso3 = _validate_iso3(iso3)
     with cursor() as cur:
         cur.execute(
             """
@@ -472,22 +632,26 @@ def api_defence_entity(entity_id: str):
     with cursor() as cur:
         cur.execute(
             """
+            WITH country_names AS (
+                SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+                FROM documents WHERE country_name IS NOT NULL
+                ORDER BY country_iso3, id
+            )
             SELECT
                 df.canonical_defence_facility_id,
                 (SELECT df2.facility_name FROM defence_facilities df2
                  WHERE df2.canonical_defence_facility_id = df.canonical_defence_facility_id
                  ORDER BY df2.year DESC LIMIT 1) AS canonical_name,
                 df.country_iso3,
-                (SELECT d.country_name FROM documents d
-                 WHERE d.country_iso3 = df.country_iso3
-                 AND d.country_name IS NOT NULL LIMIT 1) AS country_name,
+                cn.country_name,
                 array_agg(DISTINCT df.facility_name ORDER BY df.facility_name)
                     FILTER (WHERE df.facility_name IS NOT NULL) AS all_names,
                 MIN(df.year) AS first_year,
                 MAX(df.year) AS last_year
             FROM defence_facilities df
+            LEFT JOIN country_names cn ON cn.country_iso3 = df.country_iso3
             WHERE df.canonical_defence_facility_id = %s
-            GROUP BY df.canonical_defence_facility_id, df.country_iso3
+            GROUP BY df.canonical_defence_facility_id, df.country_iso3, cn.country_name
         """,
             (entity_id,),
         )
@@ -526,16 +690,20 @@ def api_vaccine_entity(entity_id: str):
     with cursor() as cur:
         cur.execute(
             """
+            WITH country_names AS (
+                SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+                FROM documents WHERE country_name IS NOT NULL
+                ORDER BY country_iso3, id
+            )
             SELECT
                 vf.id              AS canonical_vaccine_facility_id,
                 vf.canonical_name,
                 vf.country_iso3,
                 vf.first_year,
                 vf.last_year,
-                (SELECT d.country_name FROM documents d
-                 WHERE  d.country_iso3 = vf.country_iso3
-                 AND    d.country_name IS NOT NULL LIMIT 1) AS country_name
+                cn.country_name
             FROM vaccine_facilities vf
+            LEFT JOIN country_names cn ON cn.country_iso3 = vf.country_iso3
             WHERE vf.id = %s
         """,
             (entity_id,),
@@ -568,7 +736,7 @@ def api_vaccine_entity(entity_id: str):
 
 @app.get("/api/country/{iso3}/vaccine", summary="Vaccine facilities for one country")
 def api_country_vaccine(iso3: str):
-    iso3 = iso3.upper()
+    iso3 = _validate_iso3(iso3)
     with cursor() as cur:
         cur.execute(
             """
@@ -602,7 +770,7 @@ def api_country_vaccine(iso3: str):
 
 @app.get("/api/country/{iso3}/legislation", summary="Biosafety legislation history for one country")
 def api_country_legislation(iso3: str):
-    iso3 = iso3.upper()
+    iso3 = _validate_iso3(iso3)
     with cursor() as cur:
         cur.execute(
             """
@@ -636,7 +804,7 @@ def api_country_legislation(iso3: str):
     "/api/country/{iso3}/past-programmes", summary="Past offensive/defensive programme declarations for one country"
 )
 def api_country_past_programmes(iso3: str):
-    iso3 = iso3.upper()
+    iso3 = _validate_iso3(iso3)
     with cursor() as cur:
         cur.execute(
             """
@@ -827,6 +995,9 @@ def api_map_vaccines(request: Request):
 
 @app.get("/api/map/compliance", summary="Per-country Form A1 submission rates for choropleth")
 def api_map_compliance():
+    cached = _cache.get("compliance")
+    if cached is not None:
+        return _json(cached)
     with cursor() as cur:
         cur.execute("""
             SELECT
@@ -842,7 +1013,9 @@ def api_map_compliance():
             WHERE NOT d.is_amendment
             GROUP BY d.country_iso3
         """)
-        return _json([dict(r) for r in cur.fetchall()])
+        result = [dict(r) for r in cur.fetchall()]
+    _cache.set("compliance", result)
+    return _json(result)
 
 
 # ── /api/search ───────────────────────────────────────────────────────────────
@@ -862,6 +1035,11 @@ def api_search(
         like = f"%{q}%"
         cur.execute(
             """
+            WITH country_names AS (
+                SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+                FROM documents WHERE country_name IS NOT NULL
+                ORDER BY country_iso3, id
+            )
             SELECT
                 f.canonical_facility_id        AS id,
                 f.canonical_name               AS name,
@@ -869,9 +1047,7 @@ def api_search(
                 f.latest_containment,
                 f.years_declared,
                 'A1'                           AS layer,
-                (SELECT country_name FROM documents
-                 WHERE  country_iso3 = f.country_iso3
-                 AND    country_name IS NOT NULL LIMIT 1) AS country_name,
+                cn.country_name,
                 -- Distinguish name matches from activity/organism text matches
                 CASE
                   WHEN f.canonical_name ILIKE %s
@@ -886,6 +1062,7 @@ def api_search(
                    AND fy2.agents_summary ILIKE %s
                  ORDER BY fy2.year DESC LIMIT 1) AS activity_snippet
             FROM facilities f
+            LEFT JOIN country_names cn ON cn.country_iso3 = f.country_iso3
             WHERE f.canonical_name ILIKE %s
                OR EXISTS (
                    SELECT 1 FROM unnest(f.all_names) AS n(name)
@@ -904,12 +1081,11 @@ def api_search(
                 NULL                           AS latest_containment,
                 ARRAY(SELECT generate_series(vf.first_year::int, vf.last_year::int)) AS years_declared,
                 'G'                            AS layer,
-                (SELECT country_name FROM documents
-                 WHERE  country_iso3 = vf.country_iso3
-                 AND    country_name IS NOT NULL LIMIT 1) AS country_name,
+                cn.country_name,
                 'name'                         AS match_type,
                 NULL::text                     AS activity_snippet
             FROM vaccine_facilities vf
+            LEFT JOIN country_names cn ON cn.country_iso3 = vf.country_iso3
             WHERE vf.canonical_name ILIKE %s
             UNION ALL
             SELECT DISTINCT ON (df.country_iso3, df.facility_name)
@@ -919,12 +1095,11 @@ def api_search(
                 NULL                           AS latest_containment,
                 NULL                           AS years_declared,
                 'A2'                           AS layer,
-                (SELECT country_name FROM documents
-                 WHERE  country_iso3 = df.country_iso3
-                 AND    country_name IS NOT NULL LIMIT 1) AS country_name,
+                cn.country_name,
                 'name'                         AS match_type,
                 NULL::text                     AS activity_snippet
             FROM defence_facilities df
+            LEFT JOIN country_names cn ON cn.country_iso3 = df.country_iso3
             WHERE df.facility_name ILIKE %s
             ORDER BY name NULLS LAST
             LIMIT 20
@@ -942,6 +1117,11 @@ def api_entity(entity_id: str):
     with cursor() as cur:
         cur.execute(
             """
+            WITH country_names AS (
+                SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+                FROM documents WHERE country_name IS NOT NULL
+                ORDER BY country_iso3, id
+            )
             SELECT
                 f.canonical_facility_id,
                 f.canonical_name,
@@ -950,10 +1130,9 @@ def api_entity(entity_id: str):
                 f.years_declared,
                 f.latest_containment,
                 f.latest_area_m2,
-                (SELECT country_name FROM documents
-                 WHERE  country_iso3 = f.country_iso3
-                 AND    country_name IS NOT NULL LIMIT 1) AS country_name
+                cn.country_name
             FROM facilities f
+            LEFT JOIN country_names cn ON cn.country_iso3 = f.country_iso3
             WHERE f.canonical_facility_id = %s
         """,
             (entity_id,),
@@ -1011,7 +1190,11 @@ def api_map_compliance_form(form: str):
     """
     form = form.upper()
     if form not in VALID_FORMS:
-        raise HTTPException(status_code=400, detail=f"Invalid form '{form}'. Must be one of: {sorted(VALID_FORMS)}")
+        raise HTTPException(status_code=400, detail="Invalid form parameter")
+    cache_key = f"compliance_{form}"
+    cached = _cache.get(cache_key)
+    if cached is not None:
+        return _json(cached)
     with cursor() as cur:
         cur.execute(
             """
@@ -1030,7 +1213,9 @@ def api_map_compliance_form(form: str):
         """,
             (form,),
         )
-        return _json([dict(r) for r in cur.fetchall()])
+        result = [dict(r) for r in cur.fetchall()]
+    _cache.set(cache_key, result)
+    return _json(result)
 
 
 # ── FEATURE 5: /api/stats/timeline ───────────────────────────────────────────
@@ -1094,13 +1279,16 @@ def api_changes_notable(
     with cursor() as cur:
         # Fetch all year records for multi-year facilities, ordered for diff computation
         cur.execute("""
+            WITH country_names AS (
+                SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+                FROM documents WHERE country_name IS NOT NULL
+                ORDER BY country_iso3, id
+            )
             SELECT
                 fy.canonical_facility_id,
                 COALESCE(f.canonical_name, fy.facility_name) AS facility_name,
                 fy.country_iso3,
-                (SELECT d.country_name FROM documents d
-                 WHERE d.country_iso3 = fy.country_iso3
-                   AND d.country_name IS NOT NULL LIMIT 1) AS country_name,
+                cn.country_name,
                 fy.year,
                 fy.has_bsl4,
                 fy.bsl4_area_m2,
@@ -1110,6 +1298,7 @@ def api_changes_notable(
                 fy.agents_summary
             FROM facility_years fy
             JOIN facilities f ON f.canonical_facility_id = fy.canonical_facility_id
+            LEFT JOIN country_names cn ON cn.country_iso3 = fy.country_iso3
             WHERE fy.year IS NOT NULL
             ORDER BY fy.canonical_facility_id, fy.year
         """)
@@ -1340,14 +1529,29 @@ Output JSON fields:
 - "legislation_category": one of "prohibitions", "exports", "imports", "biosafety", or null
 - "rationale": one-sentence description of how you interpreted the query
 
+REGIONAL COUNTRY EXPANSION — when the user mentions a region, expand it to ALL relevant ISO-3 codes from this list:
+- Europe: ALB, AND, ARM, AUT, AZE, BEL, BGR, BIH, BLR, CHE, CYP, CZE, DEU, DNK, ESP, EST, FIN, FRA, GBR, GEO, GRC, HRV, HUN, IRL, ISL, ITA, KAZ, LIE, LTU, LUX, LVA, MDA, MKD, MLT, MNE, NLD, NOR, POL, PRT, ROU, RUS, SMR, SRB, SVK, SVN, SWE, TUR, UKR
+- Asia Pacific: AFG, AUS, BGD, BRN, BTN, CHN, FJI, FSM, IDN, IND, JPN, KGZ, KHM, KIR, KOR, LAO, LKA, MDV, MHL, MMR, MNG, MYS, NPL, NZL, PAK, PHL, PLW, PNG, PRK, SGP, SLB, THA, TJK, TKM, TLS, TON, TUV, TWN, UZB, VNM, VUT, WSM
+- Africa: AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE
+- Americas: ARG, BHS, BLZ, BOL, BRA, BRB, CAN, CHL, COL, CRI, CUB, DMA, DOM, ECU, GRD, GTM, GUY, HND, HTI, JAM, KNA, LCA, MEX, NIC, PAN, PER, PRY, SLV, SUR, TTO, URY, USA, VCT, VEN
+- Middle East: ARE, BHR, CYP, EGY, IRN, IRQ, ISR, JOR, KWT, LBN, OMN, PSE, QAT, SAU, SYR, TUR, YEM
+
+When the query mentions a region (e.g. "in Europe", "Asia Pacific countries"), include ALL codes for that region. Do NOT omit countries just because you are unsure if they are in the database.
+
 Return only valid JSON. No explanation outside the JSON."""
+
+
+_NQ_BLOCKED = frozenset({"union", "select", "insert", "update", "delete", "drop", "--", "/*", "*/"})
 
 
 def _nq_clean_list(val, max_items=10, max_term_len=100):
     """Validate and clamp a list field from Claude's classification output."""
     if not isinstance(val, list):
         return []
-    return [str(t)[:max_term_len] for t in val[:max_items] if isinstance(t, str)]
+    cleaned = [str(t)[:max_term_len] for t in val[:max_items] if isinstance(t, str)]
+    # Filter out SQL injection keywords
+    cleaned = [t for t in cleaned if not any(b in t.lower() for b in _NQ_BLOCKED)]
+    return cleaned[:max_items]
 
 
 def _nq_clean_int(val, lo=1988, hi=2030):
@@ -1771,11 +1975,7 @@ def _nq_country_overview(*, countries, api_key, user_query, **_kw):
         answer = _nq_summarise(api_key, data_desc)
     except Exception:
         logger.exception("Summarization failed for country overview %s", iso3)
-        answer = (
-            f"{country_name} has made {total_subs} CBM submissions "
-            f"({substantive_subs} substantive), declaring {a1_facs} research "
-            f"facilities, {vac_facs} vaccine facilities, and {def_facs} defence facilities."
-        )
+        answer = "[Error: summarization temporarily unavailable — please retry]"
 
     return {
         "answer": answer,
@@ -1975,7 +2175,7 @@ def _nq_comparative(*, countries, forms, bsl, keywords, **_kw):
     }
 
 
-def _nq_legislation(*, countries, legislation_category, api_key, user_query, **_kw):
+def _nq_legislation(*, countries, legislation_category, year_min, year_max, api_key, user_query, **_kw):
     """Legislation handler: queries Form E (legislation) table and builds country entity cards."""
     conditions: list[str] = []
     params: list = []
@@ -1991,8 +2191,6 @@ def _nq_legislation(*, countries, legislation_category, api_key, user_query, **_
         cat_filter = " OR ".join([f"l.{col} = TRUE" for col in cat_cols])
         conditions.append(f"({cat_filter})")
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
     # Select category-specific columns if filtered, otherwise all 12 boolean cols
     if legislation_category and legislation_category in _LEGISLATION_CATEGORIES:
         cat_cols = _LEGISLATION_CATEGORIES[legislation_category]
@@ -2005,16 +2203,39 @@ def _nq_legislation(*, countries, legislation_category, api_key, user_query, **_
             "l.biosafety_legislation, l.biosafety_regulations, l.biosafety_other_measures"
         )
 
-    sql = f"""
-        SELECT l.country_iso3, d.country_name, l.year,
-               {bool_cols},
-               l.key_laws
-        FROM legislation l
-        JOIN documents d ON d.id = l.document_id
-        {where}
-        ORDER BY l.country_iso3, l.year DESC
-        LIMIT 200
-    """
+    # When no year range is specified, return only the most recent year per country
+    # (answers "which countries have X?" as a current-state question).
+    if year_min or year_max:
+        if year_min:
+            conditions.append("l.year >= %s")
+            params.append(year_min)
+        if year_max:
+            conditions.append("l.year <= %s")
+            params.append(year_max)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = f"""
+            SELECT l.country_iso3, d.country_name, l.year,
+                   {bool_cols},
+                   l.key_laws
+            FROM legislation l
+            JOIN documents d ON d.id = l.document_id
+            {where}
+            ORDER BY l.country_iso3, l.year DESC
+            LIMIT 200
+        """
+    else:
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = f"""
+            SELECT DISTINCT ON (l.country_iso3)
+                   l.country_iso3, d.country_name, l.year,
+                   {bool_cols},
+                   l.key_laws
+            FROM legislation l
+            JOIN documents d ON d.id = l.document_id
+            {where}
+            ORDER BY l.country_iso3, l.year DESC
+            LIMIT 200
+        """
 
     with cursor() as cur:
         # Resolve country names for any specified countries
@@ -2069,7 +2290,7 @@ def _nq_legislation(*, countries, legislation_category, api_key, user_query, **_
         answer = _nq_summarise(api_key, data_desc)
     except Exception:
         logger.exception("Summarization failed for legislation query")
-        answer = f"{n_countries} {'country' if n_countries == 1 else 'countries'} found with legislation data."
+        answer = "[Error: summarization temporarily unavailable — please retry]"
 
     return {
         "answer": answer,
@@ -2225,7 +2446,7 @@ def _nq_defence_programmes(*, countries, forms, year_min, year_max, keywords, ap
         answer = _nq_summarise(api_key, data_desc)
     except Exception:
         logger.exception("Summarization failed for defence programmes query")
-        answer = f"{n_countries} {'country' if n_countries == 1 else 'countries'} found with defence/past programme data."
+        answer = "[Error: summarization temporarily unavailable — please retry]"
 
     return {
         "answer": answer,
@@ -2507,7 +2728,7 @@ async def api_natural_query(request: Request, body: NaturalQueryRequest):
         client = _anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=512,
+            max_tokens=1024,
             system=_NQ_SYSTEM,
             messages=[{"role": "user", "content": body.q}],
         )
@@ -2527,9 +2748,9 @@ async def api_natural_query(request: Request, body: NaturalQueryRequest):
     if query_type not in _NQ_VALID_TYPES:
         query_type = "unknown"
 
-    # Country codes: 3 uppercase alpha chars only, cap at 10
-    raw_countries = _nq_clean_list(classification.get("countries"))
-    countries = [c for c in raw_countries if re.fullmatch(r"[A-Z]{3}", c)][:10]
+    # Country codes: 3 uppercase alpha chars only, cap at 60 (regional queries expand to many)
+    raw_countries = _nq_clean_list(classification.get("countries"), max_items=60)
+    countries = [c for c in raw_countries if re.fullmatch(r"[A-Z]{3}", c)][:60]
 
     # Forms: validate against VALID_FORMS
     raw_forms = _nq_clean_list(classification.get("forms"))
@@ -2602,7 +2823,14 @@ class FlagRequest(BaseModel):
 
 
 @app.post("/api/entity/{entity_id}/flag/{year}", summary="Flag or unflag a facility-year for human review")
-def api_flag_facility(entity_id: str, year: int, body: FlagRequest, _key: None = Depends(require_review_key)):
+@limiter.limit("30/minute")
+def api_flag_facility(
+    request: Request,
+    entity_id: str,
+    year: int = FastAPIPath(..., ge=1988, le=2099, description="Submission year"),
+    body: FlagRequest = ...,
+    _key: None = Depends(require_review_key),
+):
     """Set flagged_for_review and flag_note for a given canonical_facility_id + year.
     FEATURE 8: Uses cursor_write() to commit the UPDATE atomically."""
     with cursor_write() as cur:
@@ -2622,7 +2850,8 @@ def api_flag_facility(entity_id: str, year: int, body: FlagRequest, _key: None =
 
 
 @app.get("/api/flagged", summary="All facility-years flagged for review")
-def api_flagged(_key: None = Depends(require_review_key)):
+@limiter.limit("30/minute")
+def api_flagged(request: Request, _key: None = Depends(require_review_key)):
     """Returns all flagged facility-years with canonical_name, country, year, flag_note, source_url."""
     with cursor() as cur:
         cur.execute("""
@@ -2653,20 +2882,24 @@ def api_bsl4_capacity(request: Request):
     Used for the Global BSL-4 Capacity chart in the Trends modal."""
     with cursor() as cur:
         cur.execute("""
+            WITH country_names AS (
+                SELECT DISTINCT ON (country_iso3) country_iso3, country_name
+                FROM documents WHERE country_name IS NOT NULL
+                ORDER BY country_iso3, id
+            )
             SELECT
                 fy.year,
                 fy.country_iso3,
-                (SELECT d.country_name FROM documents d
-                 WHERE  d.country_iso3 = fy.country_iso3
-                   AND  d.country_name IS NOT NULL LIMIT 1) AS country_name,
+                cn.country_name,
                 SUM(fy.bsl4_area_m2)::float                 AS total_bsl4_area_m2,
                 COUNT(*) FILTER (WHERE fy.has_bsl4)         AS bsl4_facility_count
             FROM facility_years fy
+            LEFT JOIN country_names cn ON cn.country_iso3 = fy.country_iso3
             WHERE fy.bsl4_area_m2 IS NOT NULL
               AND fy.bsl4_area_m2 > 0
               AND fy.year IS NOT NULL
               AND fy.year < EXTRACT(YEAR FROM CURRENT_DATE)::int
-            GROUP BY fy.year, fy.country_iso3
+            GROUP BY fy.year, fy.country_iso3, cn.country_name
             ORDER BY fy.year, SUM(fy.bsl4_area_m2) DESC
         """)
         return _json([dict(r) for r in cur.fetchall()])

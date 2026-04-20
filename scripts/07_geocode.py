@@ -129,10 +129,15 @@ def _address_variants(address: str | None,
 
 
 def _geocode_one(query: str, country_iso3: str | None,
-                 session: requests.Session) -> dict | None:
+                 session: requests.Session,
+                 max_attempts: int = 3) -> dict | None:
     """
-    Call Nominatim for a single query.  Returns a dict with lat, lon,
-    importance, and display_name, or None if no result.
+    Call Nominatim for a single query with retry on transient errors.
+
+    Returns a dict with lat, lon, importance, and display_name, or None
+    if no result.  Retries on timeouts, rate limits (429), and transient
+    connection errors so that a single blip does not permanently lose
+    the geocode for that address.
     """
     params: dict = {
         "q":      query,
@@ -143,24 +148,52 @@ def _geocode_one(query: str, country_iso3: str | None,
     if iso2:
         params["countrycodes"] = iso2
 
-    try:
-        resp = session.get(NOMINATIM_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        results = resp.json()
-    except requests.RequestException as exc:
-        log.warning("Nominatim request failed for %r: %s", query, exc)
-        return None
+    for attempt in range(max_attempts):
+        try:
+            resp = session.get(NOMINATIM_URL, params=params, timeout=10)
 
-    if not results:
-        return None
+            # Rate-limited: honour Retry-After header, then retry
+            if resp.status_code == 429:
+                wait = int(resp.headers.get("Retry-After", 60))
+                log.info("Nominatim rate limited; waiting %ds", wait)
+                time.sleep(wait)
+                continue
 
-    r = results[0]
-    return {
-        "lat":          float(r["lat"]),
-        "lon":          float(r["lon"]),
-        "importance":   float(r.get("importance", 0)),
-        "display_name": r.get("display_name", ""),
-    }
+            resp.raise_for_status()
+            results = resp.json()
+
+            if not results:
+                return None
+
+            r = results[0]
+            return {
+                "lat":          float(r["lat"]),
+                "lon":          float(r["lon"]),
+                "importance":   float(r.get("importance", 0)),
+                "display_name": r.get("display_name", ""),
+            }
+        except requests.Timeout:
+            if attempt < max_attempts - 1:
+                backoff = 2 ** (attempt + 1)
+                log.warning("Nominatim timeout for %r; retrying in %ds (attempt %d/%d)",
+                            query, backoff, attempt + 1, max_attempts)
+                time.sleep(backoff)
+            else:
+                log.warning("Nominatim timeout after %d attempts for %r",
+                            max_attempts, query)
+                return None
+        except requests.RequestException as exc:
+            if attempt < max_attempts - 1:
+                backoff = 2 ** (attempt + 1)
+                log.warning("Nominatim error for %r: %s; retrying in %ds",
+                            query, exc, backoff)
+                time.sleep(backoff)
+            else:
+                log.warning("Nominatim failed after %d attempts for %r: %s",
+                            max_attempts, query, exc)
+                return None
+
+    return None
 
 
 def _confidence(importance: float) -> str:
@@ -199,9 +232,10 @@ def geocode_table(
     log.info("%s: %d rows to geocode", table, len(rows))
 
     attempted = succeeded = skipped = 0
+    total = len(rows)
     last_call = 0.0
 
-    for row in rows:
+    for i, row in enumerate(rows):
         row_id       = row["id"]
         address      = row["address"]
         city         = row["city"]
@@ -248,12 +282,19 @@ def geocode_table(
                            geocode_confidence = %s
                     WHERE  id = %s
                 """, (result["lon"], result["lat"], conf, row_id))
-            conn.commit()
 
         succeeded += 1
 
-        if attempted % 100 == 0:
-            log.info("%s: %d/%d geocoded so far …", table, succeeded, len(rows))
+        # Batch-commit every 100 geocoded rows for efficiency instead of
+        # committing after each individual update (saves ~2,400 round-trips
+        # on a full run of ~2,500 addresses)
+        if not dry_run and (i + 1) % 100 == 0:
+            conn.commit()
+            log.info("  Committed batch (%d/%d geocoded)", i + 1, total)
+
+    # Commit any remaining rows from the final partial batch
+    if not dry_run:
+        conn.commit()
 
     return attempted, succeeded, skipped
 

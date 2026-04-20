@@ -34,6 +34,7 @@ from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, field_validator
 from tqdm import tqdm
 
 load_dotenv()
@@ -57,31 +58,85 @@ SEGMENTED_DIR  = PROJECT_ROOT / "data" / "segmented"
 STRUCTURED_DIR = PROJECT_ROOT / "data" / "structured"
 RAW_PDFS_DIR   = PROJECT_ROOT / "data" / "raw_pdfs"
 
+# ── Catalogue validation ─────────────────────────────────────────────────────
+
+
+class CatalogueEntry(BaseModel):
+    """Validated catalogue entry — catches missing/malformed fields early.
+
+    Uses extra="allow" because the catalogue accumulates optional metadata
+    fields over time (ocr_engine, page_count, etc.) that are not needed by
+    the extraction pipeline but should not cause validation failures.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    country: str
+    country_iso3: str
+    year: int
+    language: str | None = None
+    source_url: str | None = None
+    downloaded: bool = False
+    is_amendment: bool = False
+
+    @field_validator("country_iso3")
+    @classmethod
+    def validate_iso3(cls, v: str) -> str:
+        if not re.match(r"^[A-Z]{3}$", v):
+            raise ValueError(f"Invalid ISO3 code: {v}")
+        return v
+
+    @field_validator("year")
+    @classmethod
+    def validate_year(cls, v: int) -> int:
+        if not (1980 <= v <= 2099):
+            raise ValueError(f"Year out of range: {v}")
+        return v
+
+
 # ── Constants ────────────────────────────────────────────────────────────────
 
 from model_config import MODEL
+# 8 192 output tokens is the practical ceiling for structured JSON responses
+# from Claude.  Extraction outputs average ~2 000 tokens; this headroom
+# accommodates facilities with unusually long organism lists.
 MAX_TOKENS       = 8192
-CHUNK_MAX_CHARS  = 4_000    # max chars per API call (keeps output well within 8192 token limit after translation)
-RATE_LIMIT_DELAY = 10.0     # seconds between calls  →  ≤6 req/min
+# 4 000 chars keeps each API call within Claude's optimal context range for
+# structured extraction while ensuring most individual facility entries fit
+# in a single chunk.  Larger values risked truncated JSON responses; smaller
+# values increased API call count and cost with no accuracy gain.
+CHUNK_MAX_CHARS  = 4_000
+# 10 s between API calls caps throughput at ~6 RPM, safely within the
+# Anthropic rate limit for the Sonnet tier.
+RATE_LIMIT_DELAY = 10.0
 
 # Per-token pricing for cost estimation (Sonnet, as of 2025-05 pricing).
 # Update these when switching models or if pricing changes.
 COST_PER_INPUT_TOKEN  = 3e-6    # $3 / 1M input tokens
 COST_PER_OUTPUT_TOKEN = 15e-6   # $15 / 1M output tokens
 
-# Matches the start of each facility entry (field 1): English, French, Spanish, Russian/Ukrainian
-# Russian 2015 format: "N. Наименование объекта: <name>" (sequential facility numbers)
-# Russian 2016+ format: "1. Наименование(я) объекта" (template header only; actual entry is "1.1. ...")
-# Pattern \d+\.\s+Наименование[^(] distinguishes "Наименование объекта:" (2015)
-# from "Наименование(я) объекта" (2016+ header) by checking for absence of "("
+# ── Form A1 (research facilities): field-1 boundary regex ────────────────
+# Each facility entry in Form A Part 1 restarts at field 1 ("Name of facility").
+# The regex matches the field-1 header in four languages so we can split the
+# raw text into individual facility blocks before sending to Claude.
+#   English:  "1. Name of facility ..."
+#   French:   "1. Nom de l'installation ..."
+#   Spanish:  "1. Nombre de la instalación ..."
+#   Russian:  "N. Наименование объекта ..."  (N is the sequential facility number)
+# Russian 2016+ uses "Наименование(я) объекта" as a *template header* (not a
+# real entry); we exclude it by matching "Наименование объекта" without "(я)".
 FACILITY_RE = re.compile(r"(?m)^(?:1\.\s+(?:Name|Nom|Nombre)\b|\d+\.\s+Наименование\s+объекта)")
 
-# Form G: field 1 boundary — English, French, Spanish
+# ── Form G (vaccine facilities): field-1 boundary regex ──────────────────
+# Same principle as A1: split at each facility's field 1 header.
+# Only English, French, and Spanish — no Russian vaccine submissions in corpus.
 FORM_G_RE = re.compile(r"(?m)^1\.\s+(?:Name of facility|Nom de l'installation|Nombre de la instalaci[oó]n)\b")
 
-# Form A Part 2: section boundary patterns (English only; non-English falls back to char-split)
-# Part 2(ii) programme start: "1. State the objectives..."
-# Part 2(iii) facility start: "1. What is the name of the facility?"
+# ── Form A Part 2 (defence): section boundary regexes ────────────────────
+# A2 has two sub-sections: 2(ii) programme description and 2(iii) facility list.
+# English-only patterns; non-English documents fall back to character-split chunking.
+# Part 2(ii) — programme starts with: "1. State the objectives..."
+# Part 2(iii) — facility starts with: "1. What is the name of the facility?"
 FORM_A2_PROG_RE = re.compile(r"(?m)^1\.\s+State the objectives")
 FORM_A2_FAC_RE  = re.compile(r"(?m)^1\.\s+What is the name of the facility")
 FORM_A2_CHUNK_MAX_CHARS = 12_000   # larger than A1 — each section may be 4-20 KB
@@ -1035,19 +1090,44 @@ def api_call(
     messages: list[dict],
     last_t: list[float],
     system: str = SYSTEM_PROMPT,
-) -> tuple[anthropic.types.Message, float]:
-    """Fire one API call, honouring the rate limit. Returns (message, call_time)."""
-    wait = RATE_LIMIT_DELAY - (time.time() - last_t[0])
-    if wait > 0:
-        time.sleep(wait)
-    resp = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        system=system,
-        messages=messages,
-    )
-    last_t[0] = time.time()
-    return resp
+    max_attempts: int = 3,
+) -> anthropic.types.Message:
+    """Fire one API call with rate-limit delay and retry on transient errors.
+
+    Returns the API response message.  Retries on rate-limit (429) and
+    transient server errors with exponential backoff so that a single
+    transient failure does not crash the entire extraction run.
+    """
+    for attempt in range(max_attempts):
+        try:
+            wait = RATE_LIMIT_DELAY - (time.time() - last_t[0])
+            if wait > 0:
+                time.sleep(wait)
+            resp = client.messages.create(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=system,
+                messages=messages,
+            )
+            last_t[0] = time.time()
+            return resp
+        except anthropic.RateLimitError:
+            # Rate-limit (429): back off aggressively — 60s, 120s, 240s
+            backoff = 60 * (2 ** attempt)
+            log.warning(
+                "Rate limited; retrying in %ds (attempt %d/%d)",
+                backoff, attempt + 1, max_attempts,
+            )
+            time.sleep(backoff)
+        except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+            # Transient server errors (5xx) or connection drops — shorter backoff
+            if attempt < max_attempts - 1:
+                backoff = 10 * (2 ** attempt)
+                log.warning("API error: %s; retrying in %ds", exc, backoff)
+                time.sleep(backoff)
+            else:
+                raise
+    raise RuntimeError("Anthropic API: max retries exceeded after %d attempts" % max_attempts)
 
 
 def call_and_parse(
@@ -1153,10 +1233,28 @@ def process_entry(
         return {"id": entry_id, "status": "ok", "facilities": 0, "calls": 0,
                 "input_tokens": 0, "output_tokens": 0}
 
+    # ── Checkpoint resume: recover progress from a previous interrupted run ──
+    partial_path = out_path.with_suffix(".partial.json")
     all_facilities: list[dict] = []
     total_usage = {"input_tokens": 0, "output_tokens": 0}
+    start_chunk = 0
+
+    if partial_path.exists():
+        try:
+            partial = json.loads(partial_path.read_text(encoding="utf-8"))
+            all_facilities = partial.get("facilities", [])
+            total_usage = partial.get("usage", total_usage)
+            start_chunk = partial.get("chunks_completed", 0)
+            log.info("[%s] Resuming from chunk %d/%d", entry_id, start_chunk + 1, len(chunks))
+        except (json.JSONDecodeError, KeyError):
+            log.warning("[%s] Corrupt partial file — starting fresh", entry_id)
+            partial_path.unlink()
 
     for i, chunk in enumerate(chunks):
+        # Skip chunks already completed in a previous partial run
+        if i < start_chunk:
+            continue
+
         log.debug("[%s] chunk %d/%d  (%d chars)", entry_id, i + 1, len(chunks), len(chunk))
         facilities, usage = extract_chunk(client, chunk, entry, last_t)
 
@@ -1173,7 +1271,22 @@ def process_entry(
         total_usage["input_tokens"]  += usage["input_tokens"]
         total_usage["output_tokens"] += usage["output_tokens"]
 
+        # Checkpoint after each chunk to avoid losing progress on crash
+        _checkpoint = {
+            "entry_id": entry_id, "facilities": all_facilities,
+            "chunks_completed": i + 1, "total_chunks": len(chunks),
+            "usage": total_usage,
+        }
+        partial_path.write_text(
+            json.dumps(_checkpoint, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
     _write_output(out_path, entry, all_facilities, len(chunks), total_usage)
+
+    # Clean up checkpoint now that the final output is written
+    if partial_path.exists():
+        partial_path.unlink()
 
     log.info(
         "[%s] %d facilities | %d chunk(s) | in=%d out=%d tokens",
@@ -1879,7 +1992,16 @@ def main() -> None:
         log.error("Catalogue not found: %s", CATALOGUE_PATH)
         raise SystemExit(1)
 
-    catalogue: list[dict] = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))
+    raw_catalogue = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))
+    catalogue: list[dict] = []
+    for i, entry in enumerate(raw_catalogue):
+        try:
+            validated = CatalogueEntry(**entry)
+            catalogue.append(validated.model_dump())
+        except Exception as exc:
+            log.warning("Catalogue entry %d failed validation: %s — skipping", i, exc)
+    log.info("Validated catalogue: %d entries (%d skipped)",
+             len(catalogue), len(raw_catalogue) - len(catalogue))
 
     if args.form_a2:
         form_file = "form_a2.txt"

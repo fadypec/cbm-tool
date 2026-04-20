@@ -17,21 +17,24 @@
     <link href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" rel="stylesheet">
     <link href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" rel="stylesheet">
     <!-- Custom -->
-    <link href="/static/style.css?v=20260417c" rel="stylesheet">
+    <link href="/static/style.css?v=20260417e" rel="stylesheet">
     <!-- Umami analytics — privacy-friendly, no cookies, GDPR compliant, free forever -->
     <script defer src="https://cloud.umami.is/script.js" data-website-id="1b01c3c5-4b26-4419-88aa-48ab88478c6e"></script>
 </head>
 <body>
+<a href="#main" class="skip-link">Skip to main content</a>
 
 <!-- ── Navbar ──────────────────────────────────────────────────────────── -->
 <nav id="navbar" class="d-flex align-items-center justify-content-between px-3">
     <span id="app-title">CBM Lens</span>
-    <span id="stats-bar"></span>
+    <span id="conn-status" class="conn-status" title="Connection status"></span>
+    <span id="stats-bar" aria-live="polite" aria-atomic="true"></span>
     <div id="search-wrap">
         <input id="search-input" type="text" placeholder="Ask anything, e.g. 'BSL-4 labs in Europe'" autocomplete="off"
                aria-label="Search facilities and organisms" role="combobox" aria-expanded="false" aria-controls="search-results"
                class="ai-mode">
         <ul id="search-results" role="listbox"></ul>
+        <div id="search-status" class="visually-hidden" aria-live="polite"></div>
     </div>
     <!-- Review queue button: badge shows count of flagged records; hidden when zero -->
     <button id="navbar-review" data-action="show-review-queue" title="View all facilities flagged for review" style="display:none">
@@ -42,7 +45,7 @@
 </nav>
 
 <!-- ── Main ────────────────────────────────────────────────────────────── -->
-<div id="main">
+<main id="main">
 
     <!-- Sidebar -->
     <aside id="sidebar">
@@ -59,7 +62,7 @@
             <div class="side-header">
                 <button id="back-btn" data-action="show-panel-list" title="Back" aria-label="Back to country list">←</button>
                 <div class="ms-2" style="flex:1;min-width:0">
-                    <div id="detail-title" class="side-title"></div>
+                    <h2 id="detail-title" class="side-title"></h2>
                     <div id="detail-subtitle" class="detail-subtitle"></div>
                 </div>
             </div>
@@ -126,7 +129,7 @@
     <button id="sidebar-tab" data-action="toggle-sidebar" title="Collapse sidebar" aria-label="Toggle sidebar">◀</button>
 
     <!-- Map -->
-    <div id="map">
+    <div id="map" aria-label="Interactive map. Use the country list for keyboard navigation.">
 
         <!-- Filter panel (positioned over map) -->
         <div id="filter-panel">
@@ -169,7 +172,7 @@
                     <div class="fp-year-row">
                         <button id="year-play" class="fp-play-btn" data-action="toggle-year-play" title="Animate through years" aria-label="Play year animation" disabled>▶</button>
                         <input type="number" id="year-input" step="1" disabled
-                               placeholder="e.g. 2022">
+                               placeholder="e.g. 2022" aria-label="Year">
                     </div>
                     <input type="range" id="year-slider" step="1" disabled
                            aria-label="Select year" style="width:100%;margin:4px 0 0">
@@ -215,21 +218,22 @@
                 <div id="active-filter-chips" class="fp-section" style="display:none"></div>
 
                 <div class="fp-section fp-actions">
-                    <button class="fp-btn" data-action="export-csv">⬇ Export CSV</button>
+                    <button class="fp-btn" data-action="export-csv">⬇ CSV</button>
+                    <button class="fp-btn" data-action="export-json" style="margin-left:4px">⬇ JSON</button>
                     <button class="fp-btn" id="fp-copy" data-action="copy-permalink">🔗 Copy link</button>
                     <button class="fp-btn" data-action="show-global-table">⊞ All countries</button>
                     <button class="fp-btn" id="fp-compare" data-action="show-compare" title="Compare two countries side by side">⚖ Compare</button>
                 </div>
 
                 <!-- Active filter chips: shows what is currently filtering the map -->
-                <div id="map-filter-chips" style="display:none; padding:6px 12px 8px; border-top:1px solid #eef0f8; flex-wrap:wrap; gap:4px; font-size:11px;"></div>
+                <div id="map-filter-chips" aria-live="polite" aria-label="Active filters" style="display:none; padding:6px 12px 8px; border-top:1px solid #eef0f8; flex-wrap:wrap; gap:4px; font-size:11px;"></div>
 
             </div><!-- /fp-body -->
         </div><!-- /filter-panel -->
 
     </div><!-- /map -->
 
-</div><!-- /main -->
+</main><!-- /main -->
 
 <!-- ── Entity modal ────────────────────────────────────────────────────── -->
 <div class="modal fade" id="entity-modal" tabindex="-1" aria-hidden="true" aria-labelledby="modal-title">
@@ -329,6 +333,8 @@
                 was extracted from PDF documents by a <strong>large language model (Anthropic Claude Sonnet)</strong>.
                 Extraction confidence scores (0–1) are shown per facility where available. Errors and omissions
                 are possible, particularly for scanned or non-English submissions.</p>
+                <p class="small" style="color:var(--text-secondary)">Extraction accuracy has been verified by manual spot-check against source PDFs. Confidence scores (0&ndash;1) are shown per facility where available. Records with confidence below 0.5 should be treated with caution.</p>
+                <p class="small" style="color:var(--text-secondary)">Facilities are matched across submission years using fuzzy name matching (85% similarity threshold). A canonical entity like &ldquo;USA_001&rdquo; may represent the same laboratory reported under slightly different names in different years.</p>
 
                 <h6 class="about-heading">Geocoding</h6>
                 <p>Facility locations are geocoded using <strong>OpenStreetMap Nominatim</strong> from the address
@@ -345,6 +351,21 @@
                 <p>The underlying data is accessible via a REST API. Interactive documentation
                 (including all endpoints and query parameters) is available at
                 <a href="/api/docs" target="_blank" rel="noopener noreferrer">/api/docs</a>.</p>
+
+                <h5 class="mt-4" style="color:var(--text-primary)">Glossary</h5>
+                <dl class="small" style="color:var(--text-secondary)">
+                  <dt>BWC</dt><dd>Biological Weapons Convention (entered into force 1975)</dd>
+                  <dt>CBM</dt><dd>Confidence-Building Measure — annual transparency reports submitted by BWC states parties</dd>
+                  <dt>BSL-1 / 2 / 3 / 4</dt><dd>Biosafety Levels — containment standards for handling pathogens. BSL-4 is the highest, for the most dangerous agents (e.g. Ebola, Marburg).</dd>
+                  <dt>Form A1</dt><dd>Research centres and laboratories declaration</dd>
+                  <dt>Form A2</dt><dd>National biological defence research and development programme</dd>
+                  <dt>Form E</dt><dd>Legislation, regulations, and other measures related to the BWC</dd>
+                  <dt>Form F</dt><dd>Declaration of past offensive and/or defensive biological programmes</dd>
+                  <dt>Form G</dt><dd>Vaccine production facilities</dd>
+                  <dt>Substantive</dt><dd>A form submitted with detailed content</dd>
+                  <dt>Nothing to declare</dt><dd>Form explicitly marked as having no relevant activity to report</dd>
+                  <dt>Entity</dt><dd>A canonical facility identity, merged across name variants reported in different years using fuzzy matching (85% similarity threshold)</dd>
+                </dl>
 
                 <hr>
                 <p class="text-muted small">Data extracted and processed as part of academic research on BWC transparency.
@@ -425,14 +446,14 @@
             <div class="modal-body">
                 <div class="cmp-selector-row">
                     <div class="cmp-selector-wrap">
-                        <label class="cmp-selector-label">Country A</label>
+                        <label class="cmp-selector-label" for="cmp-country-a">Country A</label>
                         <select id="cmp-country-a" class="cmp-select">
                             <option value="">— select country —</option>
                         </select>
                     </div>
                     <div class="cmp-vs">vs</div>
                     <div class="cmp-selector-wrap">
-                        <label class="cmp-selector-label">Country B</label>
+                        <label class="cmp-selector-label" for="cmp-country-b">Country B</label>
                         <select id="cmp-country-b" class="cmp-select">
                             <option value="">— select country —</option>
                         </select>
@@ -470,13 +491,13 @@
 </svg>
 
 <!-- ── Mobile sidebar backdrop ─────────────────────────────────────────── -->
-<div id="mobile-overlay" data-action="toggle-sidebar"></div>
+<div id="mobile-overlay" data-action="toggle-sidebar" role="button" aria-label="Close sidebar" tabindex="0"></div>
 
 <!-- ── Scripts ─────────────────────────────────────────────────────────── -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<script src="/static/app.js?v=20260417b"></script>
+<script src="/static/app.js?v=20260417d"></script>
 
 </body>
 </html>

@@ -36,15 +36,17 @@ skipped=0
 
 for migration in $(ls "$MIGRATIONS_DIR"/*.sql | sort); do
     fname="$(basename "$migration")"
+    # Escape single quotes to prevent SQL injection via crafted filenames
+    fname_escaped="${fname//\'/\'\'}"
     already_applied=$(psql "$DATABASE_URL" -t --quiet \
-        -c "SELECT COUNT(*) FROM schema_migrations WHERE filename = '$fname'" \
+        -c "SELECT COUNT(*) FROM schema_migrations WHERE filename = '$fname_escaped'" \
         | tr -d ' \n')
 
     if [[ "$already_applied" == "0" ]]; then
         echo "  Applying $fname …"
         psql "$DATABASE_URL" --quiet -f "$migration"
         psql "$DATABASE_URL" --quiet \
-            -c "INSERT INTO schema_migrations (filename) VALUES ('$fname')"
+            -c "INSERT INTO schema_migrations (filename) VALUES ('$fname_escaped')"
         echo "  ✓ $fname"
         applied=$((applied + 1))
     else

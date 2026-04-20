@@ -2,6 +2,15 @@
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 
+/* Accessibility: skip-to-content link — visible only on focus */
+.skip-link {
+    position: absolute; top: -50px; left: 0; z-index: 10000;
+    background: #000; color: #fff; padding: 8px 16px;
+    font-size: 14px; text-decoration: none; border-radius: 0 0 4px 0;
+    transition: top 0.15s ease;
+}
+.skip-link:focus { top: 0; }
+
 /* ── Navbar ─────────────────────────────────────────────────────────────── */
 #navbar {
     height: 54px;
@@ -25,7 +34,7 @@ html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; }
 }
 
 #stats-bar {
-    color: #8899c8;
+    color: #a5bce8;
     font-size: 12px;
     white-space: nowrap;
     flex-grow: 1;
@@ -201,7 +210,7 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     border-radius: 0 4px 4px 0;
     color: #8899c8;
     cursor: pointer;
-    padding: 6px 4px;
+    min-width: 20px; padding: 14px 8px;
     font-size: 11px;
     line-height: 1;
     flex-shrink: 0;
@@ -238,7 +247,7 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 }
 
 .side-title   { color: #c0ccf0; font-size: 14px; font-weight: 600; flex-grow: 1; }
-.side-badge   { color: #8090b8; font-size: 12px; }
+.side-badge   { color: #a5bce8; font-size: 12px; }
 
 #back-btn { background: none; border: none; color: #8899c8; font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1; transition: color 0.15s; flex-shrink: 0; }
 #back-btn:hover { color: #c0ccf0; }
@@ -265,7 +274,7 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
-    color: #8090b8;
+    color: #a5bce8;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -329,7 +338,7 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 .leg-year-head  { color: #c0ccf0; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
 .leg-table      { width: 100%; border-collapse: collapse; font-size: 11px; }
 .leg-table td   { padding: 2px 4px; vertical-align: top; }
-.leg-table td:first-child { color: #8090b8; width: 80px; }
+.leg-table td:first-child { color: #a5bce8; width: 80px; }
 .leg-table td:not(:first-child) { color: #8090b8; }
 .leg-yn-yes     { color: #1e7e45 !important; font-weight: 600; }
 .leg-yn-no      { color: #7a4010 !important; }
@@ -429,7 +438,7 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     background: none;
     border: none;
     font-size: 16px;
-    color: #8090b0;
+    color: #a5bce0;
     cursor: pointer;
     padding: 0 2px;
     line-height: 1;
@@ -613,21 +622,22 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     border-color: #bbb;
 }
 
-/* ── Remove browser focus outline on Leaflet SVG paths ─────────────────── */
-.leaflet-interactive:focus { outline: none; }
+/* Restore keyboard focus indicator on map features (WCAG 2.4.7) */
+.leaflet-interactive:focus { outline: 2px solid #4a8ad4; outline-offset: 2px; }
 
 /* ── Detail subtitle ────────────────────────────────────────────────────── */
 .detail-subtitle { color: #8090b8; font-size: 11px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Year play button ───────────────────────────────────────────────────── */
+/* Touch target meets accessibility guidelines (min 36x36) */
 .fp-play-btn {
     flex-shrink: 0;
-    width: 26px; height: 26px;
+    width: 36px; height: 36px;
     padding: 0;
     background: #eef1fa;
     border: 1px solid #c8d0e8;
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 16px;
     color: #2a3060;
     cursor: pointer;
     display: flex;
@@ -759,7 +769,7 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     font-size: 11px;
     color: #888;
     cursor: pointer;
-    padding: 0 2px;
+    min-width: 36px; min-height: 36px; padding: 8px;
     line-height: 1;
 }
 .leg-toggle:hover { color: #333; }
@@ -1493,6 +1503,15 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
     [data-theme="dark"] .compliance-legend { color: #fff !important; }
 }
 
+/* Compliance grid: horizontal scroll on small screens */
+@media (max-width: 600px) {
+    .compliance-grid { min-width: 380px; }
+    #tab-compliance { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+
+/* Heading reset: h2 detail title should inherit styles from .side-title */
+#detail-title { margin: 0; font-size: inherit; font-weight: inherit; line-height: inherit; }
+
 /* ── Accessibility: focus-visible ring ─────────────────────────────────── */
 /* Provide a visible focus indicator for keyboard navigation (WCAG 2.4.7).
    Uses :focus-visible so mouse clicks don't show the ring. */
@@ -2034,3 +2053,31 @@ select:focus-visible {
 .nq-dot-grid th, .nq-dot-grid td { text-align: center; width: 52px; padding: 4px 8px; }
 .nq-dot-grid td:first-child, .nq-dot-grid th:first-child { text-align: left; width: 52px; padding-right: 16px; }
 .nq-answer { white-space: pre-line; }
+
+/* ── Skeleton loading animation ────────────────────────────────────────── */
+.skeleton {
+    background: linear-gradient(90deg, #1a1c2e 25%, #252840 50%, #1a1c2e 75%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.5s ease-in-out infinite;
+    border-radius: 4px;
+    color: transparent !important;
+}
+.skeleton * { visibility: hidden; }
+@keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+[data-theme="light"] .skeleton {
+    background: linear-gradient(90deg, #e8e8e8 25%, #f5f5f5 50%, #e8e8e8 75%);
+    background-size: 200% 100%;
+}
+
+/* ── Connection status indicator ───────────────────────────────────────── */
+.conn-status {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #27ae60; margin-left: 8px; vertical-align: middle;
+    transition: background 0.3s;
+    flex-shrink: 0;
+}
+.conn-status.offline { background: #c0392b; }
+.conn-status.slow { background: #e67e22; }

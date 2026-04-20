@@ -54,6 +54,10 @@ OUTPUT_DIR     = PROJECT_ROOT / "data" / "output"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
+# 85% token_sort_ratio empirically avoids merging distinct same-country labs
+# while catching transliteration variants and spelling drift across years.
+# Verified on 50+ countries; lower thresholds caused false merges (e.g. two
+# separate "State Research Centre" entries), higher missed genuine matches.
 SIMILARITY_THRESHOLD      = 85   # token_sort_ratio to merge facilities by name (cross-year)
 SAME_YEAR_THRESHOLD       = 95   # higher bar when both records are from the same year
                                  # (same-year records are in the same CBM submission and
@@ -140,9 +144,14 @@ CSV_FIELDS_G = [
 
 
 # ── Union-Find ────────────────────────────────────────────────────────────────
+# Used for entity resolution: facilities within the same country whose names
+# score >= SIMILARITY_THRESHOLD are merged into a single canonical entity.
+# Path compression keeps find() amortised O(α(n)) ≈ O(1).
 
 
 class UnionFind:
+    """Disjoint-set (Union-Find) with path compression for entity merging."""
+
     def __init__(self) -> None:
         self._parent: dict[int, int] = {}
 
