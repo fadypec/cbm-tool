@@ -128,23 +128,58 @@ async def lifespan(app: FastAPI):
 
 
 def _getconn():
-    """Get a connection from the pool, raising 503 on exhaustion."""
+    """Get a connection from the pool, raising 503 on exhaustion.
+    Validates that the connection is alive; if stale (closed by Supabase after
+    idle timeout), resets it so callers never receive a dead connection."""
     try:
-        return _pool.getconn()
+        conn = _pool.getconn()
     except psycopg2.pool.PoolError as e:
         logger.error("Connection pool exhausted: %s", e)
         raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
+    # Check for stale/broken connections (Supabase closes idle connections)
+    try:
+        conn.isolation_level  # triggers a check; if closed this raises
+        if conn.closed:
+            raise psycopg2.OperationalError("connection is closed")
+        # Lightweight server-side check
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        logger.warning("Stale DB connection detected, resetting")
+        try:
+            _pool.putconn(conn, close=True)
+        except Exception:
+            pass
+        # Get a fresh connection
+        try:
+            conn = _pool.getconn()
+        except psycopg2.pool.PoolError as e:
+            logger.error("Connection pool exhausted after reset: %s", e)
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
+    return conn
 
 
 @contextmanager
 def cursor():
-    """Yield a RealDictCursor, returning the connection to the pool on exit."""
+    """Yield a RealDictCursor, returning the connection to the pool on exit.
+    Resets the connection on error so broken connections don't poison the pool."""
     conn = _getconn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             yield cur
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        # Connection died mid-query — close it so pool replaces it
+        logger.warning("DB connection failed mid-query, closing")
+        _pool.putconn(conn, close=True)
+        conn = None
+        raise
     finally:
-        _pool.putconn(conn)
+        if conn is not None:
+            try:
+                conn.rollback()  # clear any aborted transaction state
+            except Exception:
+                pass
+            _pool.putconn(conn)
 
 
 @contextmanager
@@ -156,12 +191,18 @@ def cursor_write():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             yield cur
         conn.commit()
+    except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+        logger.warning("DB connection failed mid-write, closing: %s", e)
+        _pool.putconn(conn, close=True)
+        conn = None
+        raise
     except Exception as e:
         conn.rollback()
         logger.error("DB error, rolling back: %s", e)
         raise
     finally:
-        _pool.putconn(conn)
+        if conn is not None:
+            _pool.putconn(conn)
 
 
 # ── JSON serialisation ───────────────────────────────────────────────────────
@@ -2802,7 +2843,11 @@ async def api_natural_query(request: Request, body: NaturalQueryRequest):
         api_key=api_key,
     )
 
-    result = await asyncio.to_thread(handler, **handler_kwargs)
+    try:
+        result = await asyncio.to_thread(handler, **handler_kwargs)
+    except Exception:
+        logger.exception("Natural query handler '%s' failed for: %s", query_type, body.q[:80])
+        raise HTTPException(status_code=500, detail="Search processing failed. Please try again.") from None
 
     return _json({
         "query_type": query_type,
