@@ -1,7 +1,7 @@
 # Runtime dependencies for the FastAPI dashboard/API only.
 # Does not include extraction pipeline tools (pdfplumber, tesseract, etc.).
 psycopg2-binary>=2.9
-anthropic>=0.40
+anthropic>=0.84
 python-dotenv>=1.0
 fastapi>=0.110
 uvicorn[standard]>=0.27

@@ -37,6 +37,7 @@ logger = logging.getLogger("cbm-api")
 
 class _JSONFormatter(logging.Formatter):
     """Structured JSON log output for production log aggregators."""
+
     def format(self, record: logging.LogRecord) -> str:
         obj = {
             "ts": self.formatTime(record, self.datefmt),
@@ -138,7 +139,6 @@ def _getconn():
         raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
     # Check for stale/broken connections (Supabase closes idle connections)
     try:
-        conn.isolation_level  # triggers a check; if closed this raises
         if conn.closed:
             raise psycopg2.OperationalError("connection is closed")
         # Lightweight server-side check
@@ -149,7 +149,7 @@ def _getconn():
         try:
             _pool.putconn(conn, close=True)
         except Exception:
-            pass
+            logger.debug("Failed to discard stale connection", exc_info=True)
         # Get a fresh connection
         try:
             conn = _pool.getconn()
@@ -178,7 +178,7 @@ def cursor():
             try:
                 conn.rollback()  # clear any aborted transaction state
             except Exception:
-                pass
+                logger.debug("Rollback failed before returning connection", exc_info=True)
             _pool.putconn(conn)
 
 
@@ -249,6 +249,7 @@ _cache = _Cache(ttl=3600)
 
 class _Metrics:
     """Lightweight in-memory request metrics (no external dependencies)."""
+
     def __init__(self):
         self.request_count: int = 0
         self.error_count: int = 0
@@ -352,7 +353,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://cloud.umami.is; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; "
             "img-src 'self' data: https:; "
-            "connect-src 'self' https://cloud.umami.is; "
+            "connect-src 'self' https://cloud.umami.is https://gateway.umami.is; "
             "font-src 'self' https://cdn.jsdelivr.net; "
             "frame-ancestors 'none';"
         )
@@ -1505,9 +1506,14 @@ class NaturalQueryRequest(BaseModel):
 
 
 _NQ_VALID_TYPES = {
-    "facility_search", "submission_history", "country_overview",
-    "comparative", "legislation", "defence_programmes",
-    "aggregate_stats", "unknown",
+    "facility_search",
+    "submission_history",
+    "country_overview",
+    "comparative",
+    "legislation",
+    "defence_programmes",
+    "aggregate_stats",
+    "unknown",
 }
 
 _NQ_VALID_LEGISLATION_CATEGORIES = {"prohibitions", "exports", "imports", "biosafety"}
@@ -1564,13 +1570,14 @@ Output JSON fields:
 - "forms": list of form codes from {A1, A2, B, C, E, F, G} — omit or [] if not relevant
 - "year_min": integer start year or null
 - "year_max": integer end year or null
-- "organisms": list of short organism/pathogen search terms (e.g. ["anthrax"])
-- "keywords": additional keywords to search in descriptions
+- "organisms": list of short organism/pathogen search terms. These are matched as substrings against facility names and agent lists, and ANY term matching counts — so include common synonyms, scientific names and abbreviations (e.g. ["anthrax", "Bacillus anthracis"]; ["coronavirus", "SARS-CoV", "MERS", "COVID"]; ["tick-borne encephalitis", "TBEV", "encephalitis"])
+- "keywords": distinctive extra words to search in facility names/descriptions (e.g. ["veterinary"], ["vaccine"]). NEVER include generic words like "lab", "labs", "laboratory", "facility", "facilities", "research", "institute" — every record is a facility, so these only add noise. Usually leave empty.
 - "bsl": list of BSL level strings (e.g. ["BSL-4", "BSL-3"])
 - "legislation_category": one of "prohibitions", "exports", "imports", "biosafety", or null
 - "rationale": one-sentence description of how you interpreted the query
 
 REGIONAL COUNTRY EXPANSION — when the user mentions a region, expand it to ALL relevant ISO-3 codes from this list:
+- Eastern Europe (when the user says "Eastern Europe" specifically): ARM, AZE, BGR, BLR, CZE, GEO, HUN, MDA, POL, ROU, RUS, SVK, UKR — plus Baltic (EST, LTU, LVA) and Western Balkans (ALB, BIH, HRV, MKD, MNE, SRB, SVN) states
 - Europe: ALB, AND, ARM, AUT, AZE, BEL, BGR, BIH, BLR, CHE, CYP, CZE, DEU, DNK, ESP, EST, FIN, FRA, GBR, GEO, GRC, HRV, HUN, IRL, ISL, ITA, KAZ, LIE, LTU, LUX, LVA, MDA, MKD, MLT, MNE, NLD, NOR, POL, PRT, ROU, RUS, SMR, SRB, SVK, SVN, SWE, TUR, UKR
 - Asia Pacific: AFG, AUS, BGD, BRN, BTN, CHN, FJI, FSM, IDN, IND, JPN, KGZ, KHM, KIR, KOR, LAO, LKA, MDV, MHL, MMR, MNG, MYS, NPL, NZL, PAK, PHL, PLW, PNG, PRK, SGP, SLB, THA, TJK, TKM, TLS, TON, TUV, TWN, UZB, VNM, VUT, WSM
 - Africa: AGO, BDI, BEN, BFA, BWA, CAF, CIV, CMR, COD, COG, COM, CPV, DJI, DZA, EGY, ERI, ETH, GAB, GHA, GIN, GMB, GNB, GNQ, KEN, LBR, LBY, LSO, MAR, MDG, MLI, MOZ, MRT, MUS, MWI, NAM, NER, NGA, RWA, SDN, SEN, SLE, SOM, SSD, STP, SWZ, SYC, TCD, TGO, TUN, TZA, UGA, ZAF, ZMB, ZWE
@@ -1607,8 +1614,14 @@ def _nq_clean_int(val, lo=1988, hi=2030):
 
 
 _NQ_FALLBACK_NAMES = {
-    "CHN": "China", "FRA": "France", "RUS": "Russia", "IND": "India",
-    "PRK": "North Korea", "ISR": "Israel", "EGY": "Egypt", "IRN": "Iran",
+    "CHN": "China",
+    "FRA": "France",
+    "RUS": "Russia",
+    "IND": "India",
+    "PRK": "North Korea",
+    "ISR": "Israel",
+    "EGY": "Egypt",
+    "IRN": "Iran",
 }
 
 
@@ -1644,26 +1657,94 @@ RULES:
 - Keep it under 400 characters."""
 
 
-def _nq_summarise(api_key, data_description):
-    """Second Haiku call to generate a natural language summary from structured data."""
+# Sonnet rather than Haiku: Haiku 5.5's safety classifiers consistently decline
+# ordinary facility searches ("labs in Eastern Europe working on influenza"),
+# and Haiku has no server-side refusal fallback.
+_NQ_MODEL = "claude-sonnet-5-5"
+
+
+class _NQRefusal(Exception):
+    """Raised when the model (and its fallback) decline a request."""
+
+
+def _nq_complete(api_key, system, content, max_tokens):
+    """Single Claude call returning the response text.
+
+    The model thinks by default, so the response may start with thinking
+    blocks: read text blocks by type, and leave max_tokens headroom for
+    thinking. Low effort keeps latency down for these short tasks. On a
+    safety-classifier refusal the API re-runs the request on a fallback model."""
     client = _anthropic.Anthropic(api_key=api_key)
-    msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=256,
-        system=_NQ_SUMMARISE_SYSTEM,
-        messages=[{"role": "user", "content": data_description}],
+    msg = client.beta.messages.create(
+        model=_NQ_MODEL,
+        max_tokens=max_tokens,
+        output_config={"effort": "low"},
+        system=system,
+        messages=[{"role": "user", "content": content}],
+        betas=["server-side-fallback-2026-07-01"],
+        # Not yet a named parameter in the pinned SDK
+        extra_body={"fallbacks": "default"},
     )
-    return msg.content[0].text.strip()[:500]
+    if msg.stop_reason == "refusal":
+        raise _NQRefusal(getattr(msg.stop_details, "category", None))
+    return "".join(b.text for b in msg.content if b.type == "text").strip()
+
+
+def _nq_summarise(api_key, data_description):
+    """Second Claude call to generate a natural language summary from structured data."""
+    return _nq_complete(api_key, _NQ_SUMMARISE_SYSTEM, data_description, max_tokens=2048)[:500]
 
 
 # ── Handler stubs ────────────────────────────────────────────────────────────
 # Each returns {answer, data, entities, facilities, use_compare_mode}.
 # Real implementations will be added in subsequent tasks.
 
+# Filler words the classifier sometimes emits as keywords. They describe what
+# every record is, so AND-ing or OR-ing them adds nothing but noise.
+_NQ_GENERIC_TERMS = frozenset(
+    {
+        "lab",
+        "labs",
+        "laboratory",
+        "laboratories",
+        "facility",
+        "facilities",
+        "research",
+        "centre",
+        "centres",
+        "center",
+        "centers",
+        "institute",
+        "institutes",
+        "work",
+        "working",
+        "programme",
+        "programmes",
+        "program",
+        "programs",
+    }
+)
+
+
+def _nq_search_terms(organisms, keywords):
+    """Merge organism + keyword terms, dropping generic filler and duplicates."""
+    terms: list[str] = []
+    for t in organisms + keywords:
+        t = t.strip()
+        if t and t.lower() not in _NQ_GENERIC_TERMS and t.lower() not in (x.lower() for x in terms):
+            terms.append(t)
+    return terms
+
+
 def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
-    """Facility search handler: queries A1, G, and A2 tables and builds entity cards."""
+    """Facility search handler: queries A1, G, and A2 tables and builds entity cards.
+
+    Search terms are OR-matched (the classifier emits synonyms and loosely
+    related keywords; AND-ing them made results vanish), and A1 results are
+    ranked by how many terms they match."""
+    terms = _nq_search_terms(organisms, keywords)
     # No conditions → empty results immediately
-    if not organisms and not keywords and not countries and not bsl:
+    if not terms and not countries and not bsl:
         return {"answer": "", "data": [], "entities": [], "facilities": [], "use_compare_mode": False}
 
     # Build WHERE conditions and params for the main A1 facilities query
@@ -1675,15 +1756,20 @@ def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
         a1_conditions.append(f"f.country_iso3 IN ({placeholders})")
         a1_params.extend(countries)
 
-    for term in organisms + keywords:
+    term_matches: list[str] = []
+    term_params: list = []
+    for term in terms:
         like = f"%{term}%"
-        a1_conditions.append(
+        term_matches.append(
             "(f.canonical_name ILIKE %s OR EXISTS ("
             "SELECT 1 FROM facility_years fy2 "
             "WHERE fy2.canonical_facility_id = f.canonical_facility_id "
             "AND fy2.agents_summary ILIKE %s))"
         )
-        a1_params.extend([like, like])
+        term_params.extend([like, like])
+    if term_matches:
+        a1_conditions.append("(" + " OR ".join(term_matches) + ")")
+        a1_params.extend(term_params)
 
     for level in bsl:
         like = f"%{level}%"
@@ -1695,6 +1781,8 @@ def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
         a1_params.append(like)
 
     where_a1 = ("WHERE " + " AND ".join(a1_conditions)) if a1_conditions else ""
+    # Rank by number of matched terms so the most relevant facilities survive LIMIT
+    score_a1 = (" + ".join(f"({m})::int" for m in term_matches) + " DESC, ") if term_matches else ""
 
     a1_sql = f"""
         WITH cn AS (
@@ -1713,7 +1801,7 @@ def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
         FROM facilities f
         LEFT JOIN cn ON cn.country_iso3 = f.country_iso3
         {where_a1}
-        ORDER BY f.canonical_name NULLS LAST
+        ORDER BY {score_a1}f.canonical_name NULLS LAST
         LIMIT 50
     """
 
@@ -1721,7 +1809,8 @@ def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
     seen_countries: set[str] = set()
 
     with cursor() as cur:
-        cur.execute(a1_sql, a1_params)
+        # Score placeholders come after WHERE placeholders in the SQL text
+        cur.execute(a1_sql, a1_params + term_params)
         rows = cur.fetchall()
         for r in rows:
             rec = dict(r)
@@ -1737,10 +1826,9 @@ def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
             placeholders = ",".join(["%s"] * len(countries))
             vac_conditions.append(f"vf.country_iso3 IN ({placeholders})")
             vac_params.extend(countries)
-            for term in organisms + keywords:
-                like = f"%{term}%"
-                vac_conditions.append("vf.canonical_name ILIKE %s")
-                vac_params.append(like)
+            if terms:
+                vac_conditions.append("(" + " OR ".join(["vf.canonical_name ILIKE %s"] * len(terms)) + ")")
+                vac_params.extend(f"%{t}%" for t in terms)
 
             vac_sql = f"""
                 WITH cn AS (
@@ -1774,10 +1862,9 @@ def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
             def_params: list = []
             def_conditions.append(f"de.country_iso3 IN ({placeholders})")
             def_params.extend(countries)
-            for term in organisms + keywords:
-                like = f"%{term}%"
-                def_conditions.append("de.canonical_name ILIKE %s")
-                def_params.append(like)
+            if terms:
+                def_conditions.append("(" + " OR ".join(["de.canonical_name ILIKE %s"] * len(terms)) + ")")
+                def_params.extend(f"%{t}%" for t in terms)
 
             def_sql = f"""
                 WITH cn AS (
@@ -1811,11 +1898,13 @@ def _nq_facility_search(*, countries, organisms, keywords, bsl, **_kw):
         if seen_countries:
             country_names = _nq_country_names(cur, list(seen_countries))
             for iso3 in sorted(seen_countries):
-                entities.append({
-                    "type": "country",
-                    "iso3": iso3,
-                    "name": country_names.get(iso3, iso3),
-                })
+                entities.append(
+                    {
+                        "type": "country",
+                        "iso3": iso3,
+                        "name": country_names.get(iso3, iso3),
+                    }
+                )
 
     return {
         "answer": "",
@@ -1902,8 +1991,7 @@ def _nq_submission_history(*, countries, forms, year_min, year_max, **_kw):
     # Build country entity cards
     seen_countries = {r["country_iso3"] for r in rows if r.get("country_iso3")}
     entities = [
-        {"type": "country", "iso3": iso3, "name": country_names.get(iso3, iso3)}
-        for iso3 in sorted(seen_countries)
+        {"type": "country", "iso3": iso3, "name": country_names.get(iso3, iso3)} for iso3 in sorted(seen_countries)
     ]
 
     # Build answer text
@@ -1912,6 +2000,7 @@ def _nq_submission_history(*, countries, forms, year_min, year_max, **_kw):
         cname = country_names.get(iso3, iso3)
         # Group by form and collect year ranges
         from collections import defaultdict
+
         by_form: dict[str, list] = defaultdict(list)
         for r in rows:
             by_form[r["form"]].append(r["year"])
@@ -2049,10 +2138,13 @@ def _nq_comparative(*, countries, forms, bsl, keywords, **_kw):
         name_b = country_names.get(iso3_b, iso3_b)
 
         entities = [
-            {"type": "compare", "countries": [
-                {"iso3": iso3_a, "name": name_a},
-                {"iso3": iso3_b, "name": name_b},
-            ]},
+            {
+                "type": "compare",
+                "countries": [
+                    {"iso3": iso3_a, "name": name_a},
+                    {"iso3": iso3_b, "name": name_b},
+                ],
+            },
             {"type": "country", "iso3": iso3_a, "name": name_a},
             {"type": "country", "iso3": iso3_b, "name": name_b},
         ]
@@ -2082,9 +2174,7 @@ def _nq_comparative(*, countries, forms, bsl, keywords, **_kw):
 
     if bsl:
         # Count A1 facilities per country filtered by BSL level, include area
-        bsl_conditions = " OR ".join(
-            ["fy.highest_containment ILIKE %s"] * len(bsl)
-        )
+        bsl_conditions = " OR ".join(["fy.highest_containment ILIKE %s"] * len(bsl))
         bsl_params = [f"%{level}%" for level in bsl]
         bsl_num = "".join(c for c in bsl[0] if c.isdigit())
         area_col = f"fy.bsl{bsl_num}_area_m2" if bsl_num in ("2", "3", "4") else None
@@ -2099,7 +2189,7 @@ def _nq_comparative(*, countries, forms, bsl, keywords, **_kw):
             LEFT JOIN facility_years fy ON fy.canonical_facility_id = f.canonical_facility_id
             WHERE ({bsl_conditions}) {country_filter}
             GROUP BY f.country_iso3, cn.country_name
-            ORDER BY {f"area_m2 DESC NULLS LAST" if area_col else "count DESC"}
+            ORDER BY {"area_m2 DESC NULLS LAST" if area_col else "count DESC"}
             LIMIT 10
         """
         params = bsl_params + params
@@ -2203,8 +2293,7 @@ def _nq_comparative(*, countries, forms, bsl, keywords, **_kw):
         )
 
     entities = [
-        {"type": "country", "iso3": r["country_iso3"], "name": r.get("country_name") or r["country_iso3"]}
-        for r in rows
+        {"type": "country", "iso3": r["country_iso3"], "name": r.get("country_name") or r["country_iso3"]} for r in rows
     ]
 
     return {
@@ -2304,8 +2393,7 @@ def _nq_legislation(*, countries, legislation_category, year_min, year_max, api_
     # Build country entity cards
     seen_countries = {r["country_iso3"] for r in rows if r.get("country_iso3")}
     entities = [
-        {"type": "country", "iso3": iso3, "name": country_names.get(iso3, iso3)}
-        for iso3 in sorted(seen_countries)
+        {"type": "country", "iso3": iso3, "name": country_names.get(iso3, iso3)} for iso3 in sorted(seen_countries)
     ]
 
     # Build data description for the summarizer (cap at 20 rows)
@@ -2313,7 +2401,9 @@ def _nq_legislation(*, countries, legislation_category, year_min, year_max, api_
     desc_parts = []
     for r in desc_rows:
         cname = country_names.get(r["country_iso3"], r["country_iso3"])
-        true_measures = [col for col in r if col not in ("country_iso3", "country_name", "year", "key_laws") and r[col] is True]
+        true_measures = [
+            col for col in r if col not in ("country_iso3", "country_name", "year", "key_laws") and r[col] is True
+        ]
         key_laws = r.get("key_laws") or []
         laws_str = (", ".join(key_laws[:3])) if key_laws else "none listed"
         desc_parts.append(
@@ -2349,7 +2439,9 @@ def _nq_defence_programmes(*, countries, forms, year_min, year_max, keywords, ap
     forms_upper = [f.upper() for f in (forms or [])]
 
     query_past = "F" in forms_upper or any(k in kw_lower for k in ("offensive", "defensive", "past"))
-    query_current = "A2" in forms_upper or any(k in kw_lower for k in ("budget", "funding", "contractor", "current", "defence", "defense"))
+    query_current = "A2" in forms_upper or any(
+        k in kw_lower for k in ("budget", "funding", "contractor", "current", "defence", "defense")
+    )
 
     # If neither is indicated, query both
     if not query_past and not query_current:
@@ -2452,8 +2544,7 @@ def _nq_defence_programmes(*, countries, forms, year_min, year_max, keywords, ap
     # Build country entity cards
     seen_countries = {r["country_iso3"] for r in all_rows if r.get("country_iso3")}
     entities = [
-        {"type": "country", "iso3": iso3, "name": country_names.get(iso3, iso3)}
-        for iso3 in sorted(seen_countries)
+        {"type": "country", "iso3": iso3, "name": country_names.get(iso3, iso3)} for iso3 in sorted(seen_countries)
     ]
 
     # Build data description for the summarizer (cap at 15 rows)
@@ -2498,7 +2589,9 @@ def _nq_defence_programmes(*, countries, forms, year_min, year_max, keywords, ap
     }
 
 
-def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keywords, bsl, legislation_category, user_query, api_key):
+def _nq_aggregate_stats(
+    *, countries, forms, year_min, year_max, organisms, keywords, bsl, legislation_category, user_query, api_key
+):
     """Return aggregate statistics: BSL counts, form submission counts, or global totals."""
     with cursor() as cur:
         # ── Path A: BSL filter present ───────────────────────────────────────
@@ -2512,8 +2605,7 @@ def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keyw
             params: list = [f"%{bsl_val}%"]
             area_select = f", SUM(fy.{area_col})::float AS total_area_m2" if area_col else ""
             area_join = (
-                "LEFT JOIN facility_years fy ON fy.canonical_facility_id = f.canonical_facility_id"
-                if area_col else ""
+                "LEFT JOIN facility_years fy ON fy.canonical_facility_id = f.canonical_facility_id" if area_col else ""
             )
             country_filter = ""
             if countries:
@@ -2535,14 +2627,13 @@ def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keyw
                 {area_join}
                 WHERE f.latest_containment ILIKE %s {country_filter}
                 GROUP BY f.country_iso3, cn.country_name
-                ORDER BY {f"total_area_m2 DESC NULLS LAST" if area_col else "facility_count DESC"}
+                ORDER BY {"total_area_m2 DESC NULLS LAST" if area_col else "facility_count DESC"}
                 LIMIT 15
             """
             cur.execute(sql, params)
             rows = [dict(r) for r in cur.fetchall()]
 
             total_facilities = sum(r["facility_count"] for r in rows)
-            total_area = sum(r.get("total_area_m2") or 0 for r in rows) if area_col else None
 
             # Detect requested countries missing from results
             missing_names: list[str] = []
@@ -2695,10 +2786,7 @@ def _nq_aggregate_stats(*, countries, forms, year_min, year_max, organisms, keyw
             else:
                 answer = f"{country_list} has declared {', '.join(parts)} across {subs} submission{'s' if subs != 1 else ''}."
 
-            entities = [
-                {"type": "country", "iso3": c, "name": country_names.get(c, c)}
-                for c in countries
-            ]
+            entities = [{"type": "country", "iso3": c, "name": country_names.get(c, c)} for c in countries]
             return {
                 "answer": answer,
                 "data": [
@@ -2766,20 +2854,26 @@ async def api_natural_query(request: Request, body: NaturalQueryRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured on this server")
 
     def _call_claude():
-        client = _anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            system=_NQ_SYSTEM,
-            messages=[{"role": "user", "content": body.q}],
-        )
-        raw = msg.content[0].text.strip()
+        raw = _nq_complete(api_key, _NQ_SYSTEM, body.q, max_tokens=4096)
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         return json.loads(raw)
 
     try:
         classification = await asyncio.to_thread(_call_claude)
+    except _NQRefusal as e:
+        logger.warning("Natural query declined by safety classifier (%s): %s", e, body.q[:80])
+        return _json(
+            {
+                "query_type": "unknown",
+                "answer": "This query couldn't be processed. Try rephrasing it as a search, "
+                "e.g. 'BSL-3 labs in Poland' or 'facilities declaring anthrax'.",
+                "data": [],
+                "entities": [],
+                "facilities": [],
+                "use_compare_mode": False,
+            }
+        )
     except Exception:
         logger.exception("Natural query failed for: %s", body.q[:80])
         raise HTTPException(status_code=500, detail="Search processing failed. Please try again.") from None
@@ -2804,31 +2898,38 @@ async def api_natural_query(request: Request, body: NaturalQueryRequest):
     keywords = _nq_clean_list(classification.get("keywords"))
     bsl = _nq_clean_list(classification.get("bsl"))
 
+    rationale = classification.get("rationale")
+    rationale = str(rationale)[:300] if isinstance(rationale, str) else ""
+
     legislation_category = classification.get("legislation_category")
     if legislation_category not in _NQ_VALID_LEGISLATION_CATEGORIES:
         legislation_category = None
 
     # ── Route to handler ─────────────────────────────────────────────────
     if query_type == "unknown":
-        return _json({
-            "query_type": "unknown",
-            "answer": _NQ_UNKNOWN_HELP,
-            "data": [],
-            "entities": [],
-            "facilities": [],
-            "use_compare_mode": False,
-        })
+        return _json(
+            {
+                "query_type": "unknown",
+                "answer": _NQ_UNKNOWN_HELP,
+                "data": [],
+                "entities": [],
+                "facilities": [],
+                "use_compare_mode": False,
+            }
+        )
 
     handler = _NQ_HANDLERS.get(query_type)
     if not handler:
-        return _json({
-            "query_type": "unknown",
-            "answer": _NQ_UNKNOWN_HELP,
-            "data": [],
-            "entities": [],
-            "facilities": [],
-            "use_compare_mode": False,
-        })
+        return _json(
+            {
+                "query_type": "unknown",
+                "answer": _NQ_UNKNOWN_HELP,
+                "data": [],
+                "entities": [],
+                "facilities": [],
+                "use_compare_mode": False,
+            }
+        )
 
     handler_kwargs = dict(
         countries=countries,
@@ -2849,14 +2950,18 @@ async def api_natural_query(request: Request, body: NaturalQueryRequest):
         logger.exception("Natural query handler '%s' failed for: %s", query_type, body.q[:80])
         raise HTTPException(status_code=500, detail="Search processing failed. Please try again.") from None
 
-    return _json({
-        "query_type": query_type,
-        "answer": str(result.get("answer", ""))[:2000],
-        "data": result.get("data", []),
-        "entities": result.get("entities", []),
-        "facilities": result.get("facilities", []),
-        "use_compare_mode": bool(result.get("use_compare_mode", False)),
-    })
+    return _json(
+        {
+            "query_type": query_type,
+            "answer": str(result.get("answer", ""))[:2000],
+            # Shown in the UI when a handler returns no answer text (e.g. facility_search)
+            "rationale": rationale,
+            "data": result.get("data", []),
+            "entities": result.get("entities", []),
+            "facilities": result.get("facilities", []),
+            "use_compare_mode": bool(result.get("use_compare_mode", False)),
+        }
+    )
 
 
 # ── FEATURE 8: Flag for review endpoints ──────────────────────────────────────

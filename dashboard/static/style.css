@@ -403,6 +403,9 @@ mark.sr-hl { background: #2a3a70; color: #a8c0f8; border-radius: 2px; padding: 0
 
 /* ── Map ─────────────────────────────────────────────────────────────────── */
 #map { flex: 1; position: relative; }
+/* Match the basemap ocean colour so the area beyond ±180° (noWrap) isn't Leaflet's default grey */
+#map.leaflet-container { background: #232227; }
+[data-theme="light"] #map.leaflet-container { background: #d0cfd4; }
 
 /* ── Filter panel ───────────────────────────────────────────────────────── */
 #filter-panel {

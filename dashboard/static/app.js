@@ -18,14 +18,16 @@ const CHORO_STYLE_NON_PARTY   = { fillColor: 'url(#country-hatch)', fillOpacity:
 const CHORO_STYLE_SIGNATORY   = { fillColor: '#d4b870', fillOpacity: 0.55, weight: 0.6, color: '#b09040', opacity: 0.6 };
 const CHORO_STYLE_NO_DATA     = { fillColor: '#b8bdd0', fillOpacity: 0.55, weight: 0.5, color: '#8890a0', opacity: 0.6 };
 
-// Map tile URLs for light / dark themes
+// Map tile URLs for light / dark themes. Esri Canvas basemaps are keyless;
+// CARTO basemaps started serving "API KEY REQUIRED" watermark tiles in 2026.
 const TILE_URLS = {
-    light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-    dark:  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    light: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    dark:  'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
 };
 const TILE_ATTRIBUTION =
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' +
-    ' contributors &copy; <a href="https://carto.com/">CARTO</a>';
+    'Tiles &copy; <a href="https://www.esri.com/">Esri</a> &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors';
+// Canvas tiles stop at z16; Leaflet upscales beyond that
+const TILE_MAX_NATIVE_ZOOM = 16;
 
 let _tileLayer = null;
 
@@ -310,6 +312,7 @@ function _swapTile(theme) {
     map.removeLayer(_tileLayer);
     _tileLayer = L.tileLayer(TILE_URLS[theme], {
         attribution: TILE_ATTRIBUTION,
+        maxNativeZoom: TILE_MAX_NATIVE_ZOOM,
         maxZoom: 19,
         noWrap:  true,
     }).addTo(map);
@@ -329,6 +332,7 @@ function initMap() {
     const theme = document.documentElement.dataset.theme || 'dark';
     _tileLayer = L.tileLayer(TILE_URLS[theme], {
         attribution: TILE_ATTRIBUTION,
+        maxNativeZoom: TILE_MAX_NATIVE_ZOOM,
         maxZoom: 19,
         noWrap: true,
     }).addTo(map);
