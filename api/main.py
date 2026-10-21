@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 import decimal
+import functools
+import hashlib
 import json
 import logging
 import os
@@ -110,15 +112,35 @@ def require_review_key(x_review_key: str | None = Header(default=None)) -> None:
 # ── Connection pool ──────────────────────────────────────────────────────────
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
+# ThreadedConnectionPool.getconn() raises immediately when every connection is
+# in use, and sync endpoints run on a 40-thread pool. This semaphore makes
+# callers queue for a free connection instead of failing with a 503.
+_pool_sem: threading.BoundedSemaphore | None = None
+_POOL_WAIT_SECONDS = 10
+# Ping a connection before use only if it has sat idle this long: Supabase's
+# pooler drops idle connections, but pinging on every checkout costs a round
+# trip per request.
+_IDLE_PING_SECONDS = 60
+_conn_last_used: dict[int, float] = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _pool
+    global _pool, _pool_sem
     # Allow overriding pool bounds via env vars for tuning under load
     _pool_min = int(os.getenv("DB_POOL_MIN", "1"))
     _pool_max = int(os.getenv("DB_POOL_MAX", "10"))
-    _pool = psycopg2.pool.ThreadedConnectionPool(_pool_min, _pool_max, DB_URL)
+    _pool = psycopg2.pool.ThreadedConnectionPool(
+        _pool_min,
+        _pool_max,
+        DB_URL,
+        # TCP keepalives let the OS detect connections dropped by the pooler
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=3,
+    )
+    _pool_sem = threading.BoundedSemaphore(_pool_max)
     logger.info("DB pool initialised (%d–%d connections)", _pool_min, _pool_max)
     if DB_URL and "sslmode" not in DB_URL and "localhost" not in DB_URL:
         logger.warning("DATABASE_URL missing sslmode parameter — connections may not be encrypted")
@@ -128,72 +150,98 @@ async def lifespan(app: FastAPI):
         logger.info("DB pool closed")
 
 
-def _getconn():
-    """Get a connection from the pool, raising 503 on exhaustion.
-    Validates that the connection is alive; if stale (closed by Supabase after
-    idle timeout), resets it so callers never receive a dead connection."""
+def _putconn(conn, close: bool = False) -> None:
+    """Return a connection to the pool and release its semaphore slot."""
     try:
-        conn = _pool.getconn()
-    except psycopg2.pool.PoolError as e:
-        logger.error("Connection pool exhausted: %s", e)
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
-    # Check for stale/broken connections (Supabase closes idle connections)
+        if close:
+            _conn_last_used.pop(id(conn), None)
+        else:
+            _conn_last_used[id(conn)] = _time.monotonic()
+        _pool.putconn(conn, close=close)
+    finally:
+        _pool_sem.release()
+
+
+def _conn_is_alive(conn) -> bool:
+    if conn.closed:
+        return False
+    last_used = _conn_last_used.get(id(conn))
+    if last_used is not None and _time.monotonic() - last_used < _IDLE_PING_SECONDS:
+        return True
     try:
-        if conn.closed:
-            raise psycopg2.OperationalError("connection is closed")
-        # Lightweight server-side check
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
+        if not conn.autocommit:
+            conn.rollback()
+        return True
     except (psycopg2.OperationalError, psycopg2.InterfaceError):
-        logger.warning("Stale DB connection detected, resetting")
-        try:
-            _pool.putconn(conn, close=True)
-        except Exception:
-            logger.debug("Failed to discard stale connection", exc_info=True)
-        # Get a fresh connection
-        try:
+        return False
+
+
+def _getconn(autocommit: bool):
+    """Get a live connection from the pool, waiting up to _POOL_WAIT_SECONDS
+    for one to free up (503 after that). Stale connections are discarded and
+    replaced, so callers never receive a dead connection."""
+    if not _pool_sem.acquire(timeout=_POOL_WAIT_SECONDS):
+        logger.error("Timed out waiting for a DB connection")
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+    try:
+        # After an idle period every pooled connection may be stale, so keep
+        # discarding until we get a live one (bounded by the pool size).
+        for _ in range(_pool.maxconn + 1):
             conn = _pool.getconn()
-        except psycopg2.pool.PoolError as e:
-            logger.error("Connection pool exhausted after reset: %s", e)
-            raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
-    return conn
+            if _conn_is_alive(conn):
+                conn.autocommit = autocommit
+                return conn
+            logger.warning("Stale DB connection detected, resetting")
+            _conn_last_used.pop(id(conn), None)
+            try:
+                _pool.putconn(conn, close=True)
+            except Exception:
+                logger.debug("Failed to discard stale connection", exc_info=True)
+        raise psycopg2.OperationalError("no live DB connection available")
+    except psycopg2.pool.PoolError as e:
+        _pool_sem.release()
+        logger.error("Connection pool exhausted: %s", e)
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
+    except BaseException:
+        _pool_sem.release()
+        raise
 
 
 @contextmanager
 def cursor():
-    """Yield a RealDictCursor, returning the connection to the pool on exit.
-    Resets the connection on error so broken connections don't poison the pool."""
-    conn = _getconn()
+    """Yield a RealDictCursor on an autocommit connection (reads need no
+    transaction, which saves the BEGIN/ROLLBACK round trips), returning the
+    connection to the pool on exit. Broken connections are closed so they
+    don't poison the pool."""
+    conn = _getconn(autocommit=True)
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             yield cur
     except (psycopg2.OperationalError, psycopg2.InterfaceError):
         # Connection died mid-query — close it so pool replaces it
         logger.warning("DB connection failed mid-query, closing")
-        _pool.putconn(conn, close=True)
+        _putconn(conn, close=True)
         conn = None
         raise
     finally:
         if conn is not None:
-            try:
-                conn.rollback()  # clear any aborted transaction state
-            except Exception:
-                logger.debug("Rollback failed before returning connection", exc_info=True)
-            _pool.putconn(conn)
+            _putconn(conn)
 
 
 @contextmanager
 def cursor_write():
-    """Yield a RealDictCursor with auto-commit on success (for write endpoints).
+    """Yield a RealDictCursor in a transaction, committed on success (for write endpoints).
     FEATURE 8: Used by flag/unflag endpoints to commit changes atomically."""
-    conn = _getconn()
+    conn = _getconn(autocommit=False)
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             yield cur
         conn.commit()
     except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
         logger.warning("DB connection failed mid-write, closing: %s", e)
-        _pool.putconn(conn, close=True)
+        _putconn(conn, close=True)
         conn = None
         raise
     except Exception as e:
@@ -202,7 +250,7 @@ def cursor_write():
         raise
     finally:
         if conn is not None:
-            _pool.putconn(conn)
+            _putconn(conn)
 
 
 # ── JSON serialisation ───────────────────────────────────────────────────────
@@ -215,8 +263,19 @@ class _Enc(json.JSONEncoder):
         return super().default(o)
 
 
+class _RawJSONResponse(JSONResponse):
+    """JSONResponse whose content is already-serialised bytes."""
+
+    def render(self, content: bytes) -> bytes:
+        return content
+
+
+def _dumps(data) -> bytes:
+    return json.dumps(data, cls=_Enc, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+
+
 def _json(data) -> JSONResponse:
-    return JSONResponse(content=json.loads(json.dumps(data, cls=_Enc)))
+    return _RawJSONResponse(_dumps(data))
 
 
 # ── In-memory cache ──────────────────────────────────────────────────────────
@@ -243,6 +302,33 @@ class _Cache:
 
 
 _cache = _Cache(ttl=3600)
+
+# Browser cache lifetime for cached read-only endpoints. Data only changes on
+# an (annual) database reload, so this is short purely to bound staleness.
+_BROWSER_MAX_AGE = 600
+
+
+def _cached_endpoint(func):
+    """Cache an endpoint's serialised response body (keyed by path + query) and
+    serve it with Cache-Control and an ETag, answering If-None-Match with 304.
+    Only for endpoints whose output doesn't depend on review flags or auth."""
+
+    @functools.wraps(func)
+    def wrapper(request: Request, *args, **kwargs):
+        key = f"resp:{request.url.path}?{request.url.query}"
+        entry = _cache.get(key)
+        if entry is None:
+            body = func(request, *args, **kwargs).body
+            entry = (body, '"' + hashlib.sha1(body, usedforsecurity=False).hexdigest()[:16] + '"')
+            _cache.set(key, entry)
+        body, etag = entry
+        headers = {"Cache-Control": f"public, max-age={_BROWSER_MAX_AGE}", "ETag": etag}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return _RawJSONResponse(body, headers=headers)
+
+    return wrapper
+
 
 # ── In-memory metrics ─────────────────────────────────────────────────────────
 
@@ -305,10 +391,11 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "127.0.0.1"
 
 
-# Global default: 60 requests/minute per IP for all endpoints.
-# Heavy GeoJSON map dumps are overridden to 20/minute at the route level.
-# The AI natural-query endpoint is overridden to 10/minute.
-limiter = Limiter(key_func=get_client_ip, default_limits=["60/minute"])
+# Every DB-backed route sets an explicit @limiter.limit (60/minute by default,
+# 20/minute for heavy GeoJSON dumps, 10/minute for the AI endpoint).
+# slowapi's default_limits only apply via SlowAPIMiddleware, which would also
+# throttle static assets, so limits are per-route instead; a test enforces it.
+limiter = Limiter(key_func=get_client_ip)
 
 app = FastAPI(
     title="CBM Lens",
@@ -377,9 +464,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
-# Gzip compress API responses and static files — particularly valuable for the
-# 14 MB countries.geojson, which compresses to ~3 MB.
-app.add_middleware(GZipMiddleware, minimum_size=1024)
+# Gzip compress API responses and static files. Level 6 rather than the default
+# 9: compression runs on the event loop, and 9 costs far more CPU for ~1% less size.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 
 @app.middleware("http")
@@ -421,13 +508,15 @@ def health():
 
 
 @app.get("/metrics", include_in_schema=False)
-def app_metrics():
+@limiter.limit("60/minute")
+def app_metrics(request: Request):
     """Lightweight request metrics (no Prometheus dependency)."""
     return _json(_metrics.snapshot())
 
 
 @app.api_route("/ready", methods=["GET", "HEAD"], include_in_schema=False)
-def ready():
+@limiter.limit("60/minute")
+def ready(request: Request):
     """Readiness probe — verifies DB pool can serve a connection."""
     try:
         with cursor() as cur:
@@ -532,7 +621,8 @@ def api_stats(request: Request):
 
 
 @app.get("/api/countries", summary="All submitting countries with summary stats")
-def api_countries():
+@limiter.limit("60/minute")
+def api_countries(request: Request):
     cached = _cache.get("countries")
     if cached is not None:
         return _json(cached)
@@ -569,7 +659,8 @@ def api_countries():
 
 
 @app.get("/api/country/{iso3}", summary="Submission history and facility list for one country")
-def api_country(iso3: str):
+@limiter.limit("60/minute")
+def api_country(request: Request, iso3: str):
     iso3 = _validate_iso3(iso3)
     try:
         with cursor() as cur:
@@ -630,7 +721,8 @@ def api_country(iso3: str):
 
 
 @app.get("/api/country/{iso3}/defence", summary="Defence programmes and facilities for one country")
-def api_country_defence(iso3: str):
+@limiter.limit("60/minute")
+def api_country_defence(request: Request, iso3: str):
     iso3 = _validate_iso3(iso3)
     with cursor() as cur:
         cur.execute(
@@ -670,7 +762,8 @@ def api_country_defence(iso3: str):
 
 
 @app.get("/api/entity/defence/{entity_id}", summary="Full history for one canonical defence facility")
-def api_defence_entity(entity_id: str):
+@limiter.limit("60/minute")
+def api_defence_entity(request: Request, entity_id: str):
     with cursor() as cur:
         cur.execute(
             """
@@ -728,7 +821,8 @@ def api_defence_entity(entity_id: str):
 
 
 @app.get("/api/entity/vaccine/{entity_id}", summary="Full history for one canonical vaccine facility")
-def api_vaccine_entity(entity_id: str):
+@limiter.limit("60/minute")
+def api_vaccine_entity(request: Request, entity_id: str):
     with cursor() as cur:
         cur.execute(
             """
@@ -777,7 +871,8 @@ def api_vaccine_entity(entity_id: str):
 
 
 @app.get("/api/country/{iso3}/vaccine", summary="Vaccine facilities for one country")
-def api_country_vaccine(iso3: str):
+@limiter.limit("60/minute")
+def api_country_vaccine(request: Request, iso3: str):
     iso3 = _validate_iso3(iso3)
     with cursor() as cur:
         cur.execute(
@@ -811,7 +906,8 @@ def api_country_vaccine(iso3: str):
 
 
 @app.get("/api/country/{iso3}/legislation", summary="Biosafety legislation history for one country")
-def api_country_legislation(iso3: str):
+@limiter.limit("60/minute")
+def api_country_legislation(request: Request, iso3: str):
     iso3 = _validate_iso3(iso3)
     with cursor() as cur:
         cur.execute(
@@ -845,7 +941,8 @@ def api_country_legislation(iso3: str):
 @app.get(
     "/api/country/{iso3}/past-programmes", summary="Past offensive/defensive programme declarations for one country"
 )
-def api_country_past_programmes(iso3: str):
+@limiter.limit("60/minute")
+def api_country_past_programmes(request: Request, iso3: str):
     iso3 = _validate_iso3(iso3)
     with cursor() as cur:
         cur.execute(
@@ -872,6 +969,7 @@ def api_country_past_programmes(iso3: str):
 
 @app.get("/api/map/facilities", summary="GeoJSON: all geocoded Form A1 facility-year records")
 @limiter.limit("20/minute")  # Large payload — lower cap to limit bandwidth abuse
+@_cached_endpoint
 def api_map_facilities(request: Request):
     """Returns one feature per geocoded facility-year (all years).
     Client-side year filtering applies to this dataset."""
@@ -932,6 +1030,7 @@ def api_map_facilities(request: Request):
 
 @app.get("/api/map/defence", summary="GeoJSON: all geocoded Form A2 defence facility records")
 @limiter.limit("20/minute")
+@_cached_endpoint
 def api_map_defence(request: Request):
     with cursor() as cur:
         cur.execute("""
@@ -943,6 +1042,7 @@ def api_map_defence(request: Request):
             )
             SELECT
                 df.id,
+                df.canonical_defence_facility_id              AS entity_id,
                 df.facility_name                              AS name,
                 df.country_iso3,
                 df.year,
@@ -967,6 +1067,7 @@ def api_map_defence(request: Request):
             },
             "properties": {
                 "id": r["id"],
+                "entity_id": r["entity_id"],
                 "name": r["name"],
                 "country_iso3": r["country_iso3"],
                 "country_name": r["country_name"],
@@ -982,6 +1083,7 @@ def api_map_defence(request: Request):
 
 @app.get("/api/map/vaccines", summary="GeoJSON: all geocoded Form G vaccine facility records")
 @limiter.limit("20/minute")
+@_cached_endpoint
 def api_map_vaccines(request: Request):
     with cursor() as cur:
         cur.execute("""
@@ -1036,7 +1138,8 @@ def api_map_vaccines(request: Request):
 
 
 @app.get("/api/map/compliance", summary="Per-country Form A1 submission rates for choropleth")
-def api_map_compliance():
+@limiter.limit("60/minute")
+def api_map_compliance(request: Request):
     cached = _cache.get("compliance")
     if cached is not None:
         return _json(cached)
@@ -1155,7 +1258,8 @@ def api_search(
 
 
 @app.get("/api/entity/{entity_id}", summary="Full history for one canonical facility")
-def api_entity(entity_id: str):
+@limiter.limit("60/minute")
+def api_entity(request: Request, entity_id: str):
     with cursor() as cur:
         cur.execute(
             """
@@ -1223,7 +1327,8 @@ VALID_FORMS = {"A1", "A2", "B", "C", "E", "F", "G"}
 
 
 @app.get("/api/map/compliance/{form}", summary="Per-country submission rate for a given form")
-def api_map_compliance_form(form: str):
+@limiter.limit("60/minute")
+def api_map_compliance_form(request: Request, form: str):
     """Returns per-country submission rate for any CBM form (A1, A2, B, C, E, F, G).
 
     Note: the response uses a generic ``rate`` field regardless of which form is
@@ -1265,6 +1370,7 @@ def api_map_compliance_form(form: str):
 
 @app.get("/api/stats/timeline", summary="Global longitudinal trends by year")
 @limiter.limit("30/minute")
+@_cached_endpoint
 def api_stats_timeline(request: Request):
     """Returns per-year counts of facility-years, BSL-4 facility-years, and submitting countries."""
     with cursor() as cur:
@@ -1304,10 +1410,11 @@ def api_stats_timeline(request: Request):
 
 @app.get("/api/changes/notable", summary="Notable year-on-year changes at long-established facilities")
 @limiter.limit("30/minute")
+@_cached_endpoint
 def api_changes_notable(
     request: Request,
     min_years: int = Query(
-        default=3, ge=1, description="Minimum years of prior declarations before a change counts as notable"
+        default=3, ge=1, le=30, description="Minimum years of prior declarations before a change counts as notable"
     ),
 ):
     """
@@ -1473,6 +1580,7 @@ PATHOGEN_TERMS: list[tuple[str, str]] = [
 
 @app.get("/api/pathogens/frequency", summary="Count of unique research facilities per declared organism")
 @limiter.limit("30/minute")
+@_cached_endpoint
 def api_pathogens_frequency(request: Request):
     """Returns a sorted list of pathogen/organism mentions with counts of distinct facilities
     (canonical_facility_id) that have declared work with each organism in Form A1 submissions."""
@@ -1667,6 +1775,37 @@ class _NQRefusal(Exception):
     """Raised when the model (and its fallback) decline a request."""
 
 
+@functools.lru_cache(maxsize=1)
+def _nq_client(api_key: str):
+    """Shared Anthropic client (thread-safe), so calls reuse its HTTP connection pool."""
+    return _anthropic.Anthropic(api_key=api_key)
+
+
+class _DailyBudget:
+    """Process-wide cap on AI queries per UTC day. The per-IP rate limit alone
+    doesn't bound spend against many IPs. In-memory, so it resets on deploy;
+    set a spend limit on the Anthropic workspace as the hard backstop."""
+
+    def __init__(self, cap: int):
+        self.cap = cap
+        self._day: datetime.date | None = None
+        self._count = 0
+        self._lock = threading.Lock()
+
+    def try_consume(self) -> bool:
+        today = datetime.datetime.now(datetime.UTC).date()
+        with self._lock:
+            if self._day != today:
+                self._day, self._count = today, 0
+            if self._count >= self.cap:
+                return False
+            self._count += 1
+            return True
+
+
+_nq_budget = _DailyBudget(int(os.getenv("NQ_DAILY_CAP", "1000")))
+
+
 def _nq_complete(api_key, system, content, max_tokens):
     """Single Claude call returning the response text.
 
@@ -1674,8 +1813,7 @@ def _nq_complete(api_key, system, content, max_tokens):
     blocks: read text blocks by type, and leave max_tokens headroom for
     thinking. Low effort keeps latency down for these short tasks. On a
     safety-classifier refusal the API re-runs the request on a fallback model."""
-    client = _anthropic.Anthropic(api_key=api_key)
-    msg = client.beta.messages.create(
+    msg = _nq_client(api_key).beta.messages.create(
         model=_NQ_MODEL,
         max_tokens=max_tokens,
         output_config={"effort": "low"},
@@ -2852,6 +2990,9 @@ async def api_natural_query(request: Request, body: NaturalQueryRequest):
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured on this server")
+    if not _nq_budget.try_consume():
+        logger.warning("Natural query daily budget (%d) exhausted", _nq_budget.cap)
+        raise HTTPException(status_code=503, detail="AI search has reached its daily limit. Please try again tomorrow.")
 
     def _call_claude():
         raw = _nq_complete(api_key, _NQ_SYSTEM, body.q, max_tokens=4096)
@@ -3026,6 +3167,7 @@ def api_flagged(request: Request, _key: None = Depends(require_review_key)):
 
 @app.get("/api/stats/bsl4-capacity", summary="Global BSL-4 declared area (m²) per year per country")
 @limiter.limit("30/minute")
+@_cached_endpoint
 def api_bsl4_capacity(request: Request):
     """Returns total declared BSL-4 laboratory area per year per country.
     Only includes year-records with a positive bsl4_area_m2 value.
@@ -3060,6 +3202,7 @@ def api_bsl4_capacity(request: Request):
 
 @app.get("/api/countries/transparency", summary="Composite transparency score per submitting country")
 @limiter.limit("30/minute")
+@_cached_endpoint
 def api_transparency(request: Request):
     """Composite transparency index (0-100) for each country.
 

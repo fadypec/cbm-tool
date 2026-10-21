@@ -25,7 +25,11 @@ REVIEW_KEY = os.environ["REVIEW_API_KEY"]
 
 @pytest.fixture()
 def mock_pool():
-    return MagicMock()
+    pool = MagicMock()
+    pool.maxconn = 10
+    # psycopg2 reports an open connection as closed == 0
+    pool.getconn.return_value.closed = 0
+    return pool
 
 
 @pytest.fixture()
@@ -35,9 +39,11 @@ def client(mock_pool):
         with TestClient(app) as c:
             # Reset rate limiter storage so tests are not affected by
             # previous test invocations within the same session.
-            from api.main import limiter
+            from api.main import _cache, _nq_client, limiter
 
             limiter.reset()
+            _cache.clear()
+            _nq_client.cache_clear()
             yield c, mock_pool
 
 
@@ -792,6 +798,7 @@ class TestMapDefence:
             fetchall=[
                 {
                     "id": 42,
+                    "entity_id": "GBR_D001",
                     "name": "Dstl Porton Down",
                     "country_iso3": "GBR",
                     "year": 2024,
@@ -811,6 +818,7 @@ class TestMapDefence:
         feat = body["features"][0]
         assert feat["geometry"]["type"] == "Point"
         assert feat["properties"]["name"] == "Dstl Porton Down"
+        assert feat["properties"]["entity_id"] == "GBR_D001"
 
     def test_empty_defence_map(self, client):
         c, pool = client
@@ -1908,12 +1916,15 @@ class TestNqFacilitySearchMatching:
     Haiku added keywords=["virology", "respiratory"] which were AND-ed."""
 
     def _run(self, mock_pool, **kwargs):
+        import threading
+
         from api.main import _nq_facility_search
 
         cur = _setup_cursor(mock_pool, fetchall=[])
-        with patch("api.main._pool", mock_pool):
+        with patch("api.main._pool", mock_pool), patch("api.main._pool_sem", threading.BoundedSemaphore(10)):
             _nq_facility_search(**{"countries": [], "organisms": [], "keywords": [], "bsl": [], **kwargs})
-        return cur.execute.call_args_list[0][0]
+        # The A1 facilities query (skipping e.g. the connection liveness ping)
+        return next(c[0] for c in cur.execute.call_args_list if "FROM facilities f" in c[0][0])
 
     def test_terms_are_or_matched(self, mock_pool):
         sql, params = self._run(mock_pool, organisms=["influenza"], keywords=["virology"])
@@ -1977,3 +1988,127 @@ class TestNqModelResponseShape:
         assert r.status_code == 200
         assert r.json()["query_type"] == "unknown"
         assert "rephras" in r.json()["answer"]
+
+
+class TestConnectionPool:
+    """_getconn queues for a free connection, discards stale ones, and only
+    pings connections that have been idle."""
+
+    def _conn(self, alive=True):
+        conn = MagicMock()
+        conn.closed = 0
+        if not alive:
+            import psycopg2
+
+            conn.cursor.return_value.__enter__.return_value.execute.side_effect = psycopg2.OperationalError
+        return conn
+
+    def _patch(self, pool, slots=2):
+        import threading
+
+        return patch.multiple("api.main", _pool=pool, _pool_sem=threading.BoundedSemaphore(slots))
+
+    def test_waits_then_503_when_all_connections_busy(self):
+        from fastapi import HTTPException
+
+        import api.main as m
+
+        pool = MagicMock(maxconn=1)
+        pool.getconn.return_value = self._conn()
+        with self._patch(pool, slots=1), patch.object(m, "_POOL_WAIT_SECONDS", 0.05):
+            m._getconn(autocommit=True)  # takes the only slot
+            with pytest.raises(HTTPException) as exc:
+                m._getconn(autocommit=True)
+        assert exc.value.status_code == 503
+
+    def test_released_slot_is_reusable(self):
+        import api.main as m
+
+        pool = MagicMock(maxconn=1)
+        pool.getconn.return_value = self._conn()
+        with self._patch(pool, slots=1):
+            conn = m._getconn(autocommit=True)
+            m._putconn(conn)
+            assert m._getconn(autocommit=True) is conn
+
+    def test_stale_connections_are_replaced(self):
+        import api.main as m
+
+        dead1, dead2, live = self._conn(alive=False), self._conn(alive=False), self._conn()
+        pool = MagicMock(maxconn=3)
+        pool.getconn.side_effect = [dead1, dead2, live]
+        with self._patch(pool):
+            assert m._getconn(autocommit=True) is live
+        pool.putconn.assert_any_call(dead1, close=True)
+        pool.putconn.assert_any_call(dead2, close=True)
+
+    def test_recently_used_connection_is_not_pinged(self):
+        import api.main as m
+
+        conn = self._conn()
+        pool = MagicMock(maxconn=1)
+        pool.getconn.return_value = conn
+        with self._patch(pool, slots=1):
+            m._putconn(m._getconn(autocommit=True))  # first use pings, then marks as used
+            conn.cursor.reset_mock()
+            m._getconn(autocommit=True)
+        conn.cursor.assert_not_called()
+
+
+class TestRateLimitCoverage:
+    def test_every_db_route_has_a_rate_limit(self):
+        from fastapi.routing import APIRoute
+
+        from api.main import app, limiter
+
+        exempt = {"/", "/favicon.ico", "/health"}
+        missing = [
+            r.path
+            for r in app.routes
+            if isinstance(r, APIRoute)
+            and r.path not in exempt
+            and f"{r.endpoint.__module__}.{r.endpoint.__name__}" not in limiter._route_limits
+        ]
+        assert missing == []
+
+
+class TestCachedEndpoints:
+    def test_cached_response_has_etag_and_answers_304(self, client):
+        c, pool = client
+        cur = _setup_cursor(pool, fetchall=[])
+        r1 = c.get("/api/map/defence")
+        assert r1.status_code == 200
+        assert "max-age" in r1.headers["cache-control"]
+        etag = r1.headers["etag"]
+        queries_after_first = cur.execute.call_count
+
+        r2 = c.get("/api/map/defence")
+        assert r2.json() == r1.json()
+        assert cur.execute.call_count == queries_after_first  # served from cache
+
+        r3 = c.get("/api/map/defence", headers={"If-None-Match": etag})
+        assert r3.status_code == 304
+        assert r3.content == b""
+
+
+class TestNqDailyBudget:
+    def test_budget_resets_daily_and_caps(self):
+        from api.main import _DailyBudget
+
+        b = _DailyBudget(cap=2)
+        assert b.try_consume() and b.try_consume()
+        assert not b.try_consume()
+        b._day = None  # simulate a new day
+        assert b.try_consume()
+
+    def test_endpoint_returns_503_when_exhausted(self, client):
+        c, _ = client
+        from api.main import _DailyBudget
+
+        with (
+            patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}),
+            patch("api.main._nq_budget", _DailyBudget(cap=0)),
+        ):
+            r = c.post("/api/natural-query", json={"q": "BSL-4 labs"})
+        assert r.status_code == 503
+        assert "daily limit" in r.json()["detail"]

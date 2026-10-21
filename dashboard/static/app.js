@@ -38,7 +38,7 @@ const STATE = {
     bsl:        { 'BSL-4': true, 'BSL-3': true, 'BSL-2': true, 'BSL-1': true, unknown: true },
     year:       null,   // null = all years
     hideLow:    false,
-    aiFilterIds: null,  // Set of canonical_facility_ids from AI query (null = no filter)
+    aiFilterIds: null,  // Set of "layer:id" keys from AI query results (null = no filter)
     // Lapsed declarations: show facilities that haven't appeared in recent CBMs
     showLapsed:       false,
     lapsedThreshold:  3,   // years before country's latest submission counts as lapsed
@@ -143,7 +143,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             {}, [], { type: 'FeatureCollection', features: [] },
             { type: 'FeatureCollection', features: [] },
             { type: 'FeatureCollection', features: [] },
-            {}, [], {}
+            [], [], {}
         ];
         const results = await Promise.allSettled([
             api('/api/stats'),
@@ -166,7 +166,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         renderStats(stats);
-        initYearSlider(stats.year_min, stats.year_max);
+        // Fall back to the years present in the facility data if /api/stats failed
+        const dataYears = (a1?.features || []).map(f => f.properties.year).filter(Boolean);
+        initYearSlider(stats.year_min ?? (dataYears.length ? Math.min(...dataYears) : 1988),
+                       stats.year_max ?? (dataYears.length ? Math.max(...dataYears) : new Date().getFullYear()));
 
         compliance.forEach(c => { complianceRates[c.country_iso3] = c; });
 
@@ -259,13 +262,13 @@ let _stats = null; // kept so updateStatsBar() can re-render after layer toggles
 function renderStats(s) {
     _stats = s;
     document.getElementById('stats-bar').innerHTML =
-        `<span id="stat-a1">${s.total_unique_facilities.toLocaleString()} research</span>` +
+        `<span id="stat-a1">${(s.total_unique_facilities || 0).toLocaleString()} research</span>` +
         `<span id="stat-a1-sep">&nbsp;·&nbsp;</span>` +
         `<span id="stat-a2">${(s.total_unique_defence || 0).toLocaleString()} defence</span>` +
         `<span id="stat-a2-sep">&nbsp;·&nbsp;</span>` +
         `<span id="stat-g">${(s.total_unique_vaccine || 0).toLocaleString()} vaccine</span>` +
         `<span id="stat-g-sep">&nbsp;·&nbsp;</span>` +
-        `${s.total_countries} countries`;
+        `${s.total_countries ?? 0} countries`;
     // populate About modal dynamic counts
     const subEl = document.getElementById('about-sub-count');
     const cntEl = document.getElementById('about-country-count');
@@ -479,10 +482,9 @@ function matchesFilter(layer, feature) {
     }
 
     if (STATE.hideLow && p.geocode_conf === 'low') return false;
-    if (layer === 'A1') {
-        if (!STATE.bsl[normalizeBsl(p.containment)]) return false;
-        if (STATE.aiFilterIds && !STATE.aiFilterIds.has(p.id)) return false;
-    }
+    if (layer === 'A1' && !STATE.bsl[normalizeBsl(p.containment)]) return false;
+    // AI results identify defence facilities by canonical entity id
+    if (STATE.aiFilterIds && !STATE.aiFilterIds.has(`${layer}:${layer === 'A2' ? p.entity_id : p.id}`)) return false;
     return true;
 }
 
@@ -824,11 +826,10 @@ function initYearSlider(minYear, maxYear) {
     numInput.min = minYear;   numInput.max = maxYear;
     document.getElementById('yr-min').textContent = minYear;
     document.getElementById('yr-max').textContent = maxYear;
-    // Only set value when not already in a specific-year mode (from restoreFromHash)
-    if (STATE.year === null) {
-        slider.value   = maxYear;
-        numInput.value = maxYear;
-    }
+    // Set the value only after min/max: a permalink year restored earlier by
+    // restoreFromHash would otherwise have been clamped to the default range.
+    slider.value   = STATE.year ?? maxYear;
+    numInput.value = STATE.year ?? maxYear;
     // Ensure disabled state matches checkbox
     const allChecked = document.getElementById('all-years').checked;
     const playBtn = document.getElementById('year-play');
@@ -1046,15 +1047,16 @@ function updateChoropleth(rates) {
 async function onChoroFormChange() {
     const sel = document.getElementById('choro-form-select');
     if (!sel) return;
-    choroForm = sel.value;
+    const form = sel.value;
+    choroForm = form;
     try {
-        const newRates = await api(`/api/map/compliance/${choroForm}`);
+        const newRates = await api(`/api/map/compliance/${form}`);
+        if (choroForm !== form) return; // a newer selection superseded this one
         const rateMap = {};
-        // The form-specific endpoint returns 'rate'; normalize to 'a1_rate'
-        // so the rest of the UI (choropleth, subtitle, global table) works uniformly
-        newRates.forEach(c => { c.a1_rate = c.rate ?? c.a1_rate; rateMap[c.country_iso3] = c; });
-        // Update the global complianceRates (used by choropleth click handlers and subtitle)
-        Object.assign(complianceRates, rateMap);
+        // The form-specific endpoint returns 'rate'; updateChoropleth reads 'a1_rate'.
+        // These rates are for the choropleth only: complianceRates must keep the
+        // A1 rates, which the subtitle, global table and report label as "A1".
+        newRates.forEach(c => { rateMap[c.country_iso3] = { ...c, a1_rate: c.rate ?? c.a1_rate }; });
         updateChoropleth(rateMap);
     } catch (e) {
         console.warn('Failed to fetch compliance for form', choroForm, e);
@@ -1230,6 +1232,7 @@ async function selectCountry(iso3) {
 
     try {
         const data = await api(`/api/country/${iso3}`);
+        if (iso3 !== _currentIso3) return; // user selected another country meanwhile
         renderCountryDetail(data);
 
         // Zoom map to this country's geocoded A1 facilities
@@ -1242,6 +1245,7 @@ async function selectCountry(iso3) {
             }
         }
     } catch (e) {
+        if (iso3 !== _currentIso3) return;
         document.getElementById('detail-loading').innerHTML =
             '<span style="color:#c0392b">Error loading data.</span>';
     }
@@ -1390,6 +1394,7 @@ async function loadDefenceTab(iso3) {
     const el = document.getElementById('defence-content');
     try {
         const data = await api(`/api/country/${iso3}/defence`);
+        if (iso3 !== _currentIso3) return; // user selected another country meanwhile
         _defenceData = data;
         if (!data.programmes.length && !data.entities.length) {
             el.innerHTML = '<div class="side-placeholder">No defence data declared</div>';
@@ -1397,6 +1402,7 @@ async function loadDefenceTab(iso3) {
         }
         renderDefenceProgrammes(data.programmes);
     } catch (e) {
+        if (iso3 !== _currentIso3) return;
         el.innerHTML = '<div class="side-placeholder" style="color:#c0392b">Error loading data</div>';
     }
 }
@@ -1592,6 +1598,7 @@ async function loadVaccineTab(iso3) {
     const el = document.getElementById('vaccine-content');
     try {
         const data = await api(`/api/country/${iso3}/vaccine`);
+        if (iso3 !== _currentIso3) return; // user selected another country meanwhile
         if (!data.entities.length) {
             el.innerHTML = '<div class="side-placeholder">No vaccine facilities declared</div>';
             return;
@@ -1610,6 +1617,7 @@ async function loadVaccineTab(iso3) {
                 </div>`;
             }).join('');
     } catch (e) {
+        if (iso3 !== _currentIso3) return;
         el.innerHTML = '<div class="side-placeholder" style="color:#c0392b">Error loading data</div>';
     }
 }
@@ -1618,6 +1626,7 @@ async function loadLegislationTab(iso3) {
     const el = document.getElementById('legislation-content');
     try {
         const data = await api(`/api/country/${iso3}/legislation`);
+        if (iso3 !== _currentIso3) return; // user selected another country meanwhile
         if (!data.length) {
             el.innerHTML = '<div class="side-placeholder">No legislation data declared</div>';
             return;
@@ -1652,6 +1661,7 @@ async function loadLegislationTab(iso3) {
         });
         el.innerHTML = html;
     } catch (e) {
+        if (iso3 !== _currentIso3) return;
         el.innerHTML = '<div class="side-placeholder" style="color:#c0392b">Error loading data</div>';
     }
 }
@@ -1660,6 +1670,7 @@ async function loadHistoryTab(iso3) {
     const el = document.getElementById('history-content');
     try {
         const data = await api(`/api/country/${iso3}/past-programmes`);
+        if (iso3 !== _currentIso3) return; // user selected another country meanwhile
         if (!data.length) {
             el.innerHTML = '<div class="side-placeholder">No past programme data declared</div>';
             return;
@@ -1681,6 +1692,7 @@ async function loadHistoryTab(iso3) {
                 </div>`;
             }).join('');
     } catch (e) {
+        if (iso3 !== _currentIso3) return;
         el.innerHTML = '<div class="side-placeholder" style="color:#c0392b">Error loading data</div>';
     }
 }
@@ -2225,7 +2237,7 @@ async function authedGet(path) {
 // ── FEATURE 8: Flag for review ─────────────────────────────────────────────────
 
 async function flagFacility(entityId, year) {
-    const note = prompt(`Add a note for flagging ${entityId} (${year}):`, '') ?? '';
+    const note = prompt(`Add a note for flagging ${entityId} (${year}):`, '');
     if (note === null) return; // user cancelled
     try {
         await authedPost(`/api/entity/${encodeURIComponent(entityId)}/flag/${year}`,
@@ -2277,7 +2289,7 @@ async function refreshReviewBadge() {
 
 /** Open the review queue modal and load current flags. */
 function showReviewQueue() {
-    const modal = new bootstrap.Modal(document.getElementById('review-modal'));
+    const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('review-modal'));
     _showModalWithFocus(modal);
     loadReviewQueue();
 }
@@ -2640,7 +2652,10 @@ function _renderStatsTable(rows) {
     return html;
 }
 
+let _aiQuerySeq = 0;
+
 async function runAIQuery() {
+    const seq = ++_aiQuerySeq;
     const input      = document.getElementById('ai-query-input');
     const resultsEl  = document.getElementById('ai-query-results');
     const btn        = document.getElementById('ai-query-submit');
@@ -2662,6 +2677,7 @@ async function runAIQuery() {
             throw new Error(err.detail || `${resp.status}`);
         }
         const data = await resp.json();
+        if (seq !== _aiQuerySeq) return; // a newer query superseded this one
 
         const qt = data.query_type || 'facility_search';
 
@@ -2725,29 +2741,31 @@ async function runAIQuery() {
             statusEl.textContent = count ? `${count} result${count > 1 ? 's' : ''} found` : 'No results found';
         }
     } catch (e) {
+        if (seq !== _aiQuerySeq) return;
         const hint = e.message.includes('503') ? ' — ANTHROPIC_API_KEY not configured on this server' : '';
         resultsEl.innerHTML = `<div class="text-danger">Search failed: ${esc(e.message)}${hint}</div>`;
         const statusEl = document.getElementById('search-status');
         if (statusEl) statusEl.textContent = 'Search failed';
     } finally {
-        if (btn) btn.disabled = false;
+        if (btn && seq === _aiQuerySeq) btn.disabled = false;
     }
 }
 
 function applyAIFilter(facilities) {
     if (!facilities || !facilities.length) return;
-    STATE.aiFilterIds = new Set(facilities.map(f => f.id).filter(Boolean));
+    STATE.aiFilterIds = new Set(facilities.filter(f => f.id).map(f => `${f.layer || 'A1'}:${f.id}`));
     bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal'))?.hide();
     updateActiveFilterChips();
     applyFilters();
     // Zoom map to show filtered results
     setTimeout(() => {
-        if (CLUSTERS.A1 && CLUSTERS.A1.getLayers().length > 0) {
-            try {
-                const bounds = CLUSTERS.A1.getBounds();
-                if (bounds.isValid()) map.fitBounds(bounds.pad(0.15));
-            } catch (_) {}
+        const bounds = L.latLngBounds([]);
+        for (const layer of ['A1', 'A2', 'G']) {
+            if (CLUSTERS[layer] && map.hasLayer(CLUSTERS[layer]) && CLUSTERS[layer].getLayers().length > 0) {
+                bounds.extend(CLUSTERS[layer].getBounds());
+            }
         }
+        if (bounds.isValid()) map.fitBounds(bounds.pad(0.15));
     }, 350); // wait for modal fade-out to complete
 }
 
@@ -3481,10 +3499,25 @@ function initStaticListeners() {
 
 // ── Centralized event delegation (replaces inline onclick attributes) ────────
 
+/**
+ * Hide a modal and run `next` once it has fully closed. Opening another modal
+ * before Bootstrap finishes hiding this one leaves the page scroll-unlocked.
+ */
+function _hideModalThen(modalId, next) {
+    const modalEl = document.getElementById(modalId);
+    if (!modalEl || !modalEl.classList.contains('show')) { next(); return; }
+    modalEl.addEventListener('hidden.bs.modal', () => next(), { once: true });
+    bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+}
+
 function initEventDelegation() {
     document.addEventListener('click', e => {
         const el = e.target.closest('[data-action]');
         if (!el) return;
+        // A real link nested inside an actionable row (e.g. "source ↗" in a
+        // facility item) should navigate, not trigger the row's action.
+        const link = e.target.closest('a[href]');
+        if (link && link !== el && el.contains(link) && link.getAttribute('href') !== '#') return;
         e.preventDefault();
         const action = el.dataset.action;
         switch (action) {
@@ -3540,25 +3573,22 @@ function initEventDelegation() {
                 break;
             case 'nq-country': {
                 const iso3 = el.dataset.iso3;
-                bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal'))?.hide();
-                setTimeout(() => selectCountry(iso3), 300);
+                _hideModalThen('ai-query-modal', () => selectCountry(iso3));
                 break;
             }
             case 'nq-facility': {
                 const id = el.dataset.id;
                 const layer = el.dataset.layer;
-                bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal'))?.hide();
-                setTimeout(() => {
+                _hideModalThen('ai-query-modal', () => {
                     if (layer === 'A2') showDefenceEntityModal(id);
                     else if (layer === 'G') showVaccineEntityModal(id);
                     else showEntityModal(id);
-                }, 300);
+                });
                 break;
             }
             case 'nq-compare': {
                 const isos = el.dataset.countries.split(',');
-                bootstrap.Modal.getOrCreateInstance(document.getElementById('ai-query-modal'))?.hide();
-                setTimeout(() => {
+                _hideModalThen('ai-query-modal', () => {
                     const selA = document.getElementById('cmp-country-a');
                     const selB = document.getElementById('cmp-country-b');
                     if (selA && isos[0]) selA.value = isos[0];
@@ -3566,7 +3596,7 @@ function initEventDelegation() {
                     const compareModal = bootstrap.Modal.getOrCreateInstance(document.getElementById('compare-modal'));
                     if (compareModal) _showModalWithFocus(compareModal);
                     onCompareSelect();
-                }, 300);
+                });
                 break;
             }
 
@@ -3617,10 +3647,11 @@ function initEventDelegation() {
             case 'rq-unflag':
                 rqUnflag(el.dataset.entityId, parseInt(el.dataset.year), el);
                 break;
-            case 'review-show-entity':
-                bootstrap.Modal.getInstance(document.getElementById('review-modal'))?.hide();
-                showEntityModal(el.dataset.entityId);
+            case 'review-show-entity': {
+                const id = el.dataset.entityId;
+                _hideModalThen('review-modal', () => showEntityModal(id));
                 break;
+            }
 
             // ── Trends tabs ──
             case 'switch-trends-tab':
