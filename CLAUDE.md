@@ -25,9 +25,11 @@ python3 scripts/05_assemble_output.py              # build all CSVs/JSON
 export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
 bash db/migrate.sh                                 # apply migrations to LOCAL database
 DATABASE_URL="$SUPABASE_URL" bash db/migrate.sh    # apply migrations to PRODUCTION (Supabase)
-python3 scripts/06_load_database.py                # load (preserves geom if already geocoded)
-python3 scripts/dedup_entities.py --apply          # merge fragmented canonical entities
-python3 scripts/07_geocode.py                      # geocode (~2 hrs); only needed after fresh load
+python3 scripts/06_load_database.py --dry-run      # preview which new documents would be added
+python3 scripts/06_load_database.py                # add new documents only (incremental, safe)
+python3 scripts/07_geocode.py                      # geocode rows with no geom yet
+python3 scripts/06_load_database.py --full         # DESTRUCTIVE wipe + rebuild (asks to type 'wipe')
+python3 scripts/dedup_entities.py --apply          # only straight after a --full rebuild
 
 # Annual update (runs full pipeline interactively)
 bash scripts/annual_update.sh
@@ -45,7 +47,7 @@ pytest tests/test_api.py -v
 ```
 cbm-tool/
 ├── scripts/          01–07: extraction pipeline
-│   ├── dedup_entities.py   entity deduplication (run after 06, before 07)
+│   ├── dedup_entities.py   entity merges keyed on 05's IDs (only after 06 --full)
 │   └── annual_update.sh    interactive pipeline runner for annual updates
 ├── api/
 │   └── main.py       FastAPI app: REST endpoints + serves dashboard/
@@ -118,8 +120,11 @@ Docs disabled in production (set ENVIRONMENT=dev to enable /api/docs).
 `form_compliance`.
 
 Geom columns on `facility_years` + `defence_facilities` (EPSG:4326, Nominatim geocoding).
-Script 06 preserves `facility_years` geom on full reload; `defence_facilities` geom must
-be re-geocoded via script 07 after reload.
+Script 06 is incremental by default: it adds only documents missing from the DB,
+matching new rows to existing entities by name (05's fuzzy rules) or giving them
+fresh IDs that never reuse retired ones. Existing rows, the manual corrections in
+migrations 014–018, entity merges and geocodes are never touched. `--full` rebuilds
+from the CSVs and reverts all of that (geocodes restored by document + facility name).
 
 Entity resolution: Union-Find within-country on `facility_name` using rapidfuzz
 token_sort_ratio ≥ 85. Canonical IDs: `{ISO3}_{N:03d}`.
@@ -168,8 +173,8 @@ RATE_LIMIT_DELAY=10s (≤6 RPM). `parse_json_response` returns `dict | None`.
 ## Data safety
 
 **Always ask for explicit confirmation before any operation that could overwrite or delete existing data.** This includes:
-- Running `python3 scripts/06_load_database.py` (reloads tables, even though geom is preserved for `facility_years`)
-- Running `python3 scripts/07_geocode.py` after a reload that may have cleared geocoded geometry
+- Running `python3 scripts/06_load_database.py --full` or `--table` (truncates and reloads; reverts corrections)
+- Running the default incremental `06_load_database.py` against Supabase (run `--dry-run` first and show the output)
 - Running `python3 scripts/dedup_entities.py --apply` (rewrites canonical IDs)
 - Any SQL `DELETE`, `TRUNCATE`, or `UPDATE` that touches more than a handful of rows
 - Any migration that deletes data before applying it to Supabase (state row count, get confirmation)
@@ -181,8 +186,8 @@ Before proceeding, state what data will be affected and wait for an explicit "ye
 
 - **Script 04 is incremental**: skips documents whose output JSON already exists.
   Use `--force` to re-extract. Re-run script 05 after any re-extraction.
-- **dedup_entities.py order**: must run after `06_load_database.py` (so the
-  `facilities` table is populated) and before `07_geocode.py`.
+- **dedup_entities.py**: its merge lists use script 05's positional IDs, so only run
+  it straight after `06_load_database.py --full`, never after an incremental load.
 - **PostgreSQL PATH**: Homebrew pg17 requires `export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"`.
 - **China/France/Russia/India** have no public CBM data — this is expected, not a bug.
 - **Year regex** in 01_catalogue.py uses `(?<!\d)(20\d{2})(?!\d)` not `\b`

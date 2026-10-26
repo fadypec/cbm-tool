@@ -39,7 +39,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements-api.txt && pip install pytest pytest-cov httpx
+        run: pip install -r requirements-api.txt && pip install pytest pytest-cov httpx "rapidfuzz>=3.5" pydantic
 
       - name: Run tests with coverage
         run: pytest tests/ -v --cov=api --cov-report=term-missing --cov-fail-under=80

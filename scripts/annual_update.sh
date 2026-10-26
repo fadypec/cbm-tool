@@ -10,7 +10,7 @@
 #   03 → segment form sections
 #   04 → extract structured data (all forms)
 #   05 → assemble output CSVs/JSON
-#   06 → load into PostgreSQL
+#   06 → load new documents into PostgreSQL (incremental, confirms first)
 #   07 → geocode new facilities
 #
 # Usage:
@@ -129,26 +129,44 @@ echo "--- Step 5: Assemble output files ---"
 python3 "${PROJECT_ROOT}/scripts/05_assemble_output.py"
 echo ""
 
-# ── Step 6: Load into PostgreSQL ──────────────────────────────────────────────
-echo "--- Step 6: Load database ---"
-echo "[NOTE] This truncates and reloads all tables. Geocoded coordinates are preserved."
+# ── Step 6: Load new documents into PostgreSQL ────────────────────────────────
+# Incremental: only documents not yet in the database are added. Existing rows,
+# manual corrections, entity merges and geocodes are left untouched.
+DB_TARGET="$(python3 -c "import os,re;from dotenv import load_dotenv;load_dotenv('${PROJECT_ROOT}/.env');print(re.sub(r'://([^:/@]+):[^@]*@', r'://\\1:***@', os.getenv('DATABASE_URL','postgresql://cbm:cbm@localhost:5432/cbm')))")"
+echo "--- Step 6: Load new documents (target: ${DB_TARGET}) ---"
+python3 "${PROJECT_ROOT}/scripts/06_load_database.py" --dry-run
+echo ""
+echo "Review the new documents and entity matches above."
+echo "'new … entity' lines are facilities that matched nothing existing: if one is"
+echo "really a renamed facility, merge it afterwards (see scripts/dedup_entities.py)."
+read -rp "Write these rows to ${DB_TARGET}? [y/N] " CONFIRM
+if [[ ! "${CONFIRM}" =~ ^[Yy]$ ]]; then
+    echo "[ABORT] Database not changed."
+    exit 0
+fi
 python3 "${PROJECT_ROOT}/scripts/06_load_database.py"
 echo ""
 
-# ── Step 6b: Entity deduplication ────────────────────────────────────────────
-# Must run after DB load so the facilities table is populated with fresh data.
-# dedup_entities.py merges known fragmented canonical entities (multilingual names,
-# agency renames, etc.) — see AUDIT_DATA.md §1 for the full list of known issues.
-echo "--- Step 6b: Entity deduplication ---"
-python3 "${PROJECT_ROOT}/scripts/dedup_entities.py" --apply
+# Entity deduplication (scripts/dedup_entities.py --apply) is NOT run here: its
+# merge lists use script 05's positional IDs, which only line up with the
+# database straight after a full reload (06 --full).
+
+# ── Step 7: Geocode new rows ─────────────────────────────────────────────────
+echo "--- Step 7: Geocode new rows ---"
+echo "[NOTE] Only un-geocoded rows are processed; existing coordinates are kept."
+read -rp "Run geocoding now (Nominatim, ~1 s per row)? [y/N] " CONFIRM
+if [[ "${CONFIRM}" =~ ^[Yy]$ ]]; then
+    python3 "${PROJECT_ROOT}/scripts/07_geocode.py"
+else
+    echo "[SKIP] Run later: python3 scripts/07_geocode.py"
+fi
 echo ""
 
-# ── Step 7: Geocode new facilities ────────────────────────────────────────────
-echo "--- Step 7: Geocode new facilities (may take ~2 hours for a full run) ---"
-echo "[NOTE] Only un-geocoded rows are processed; previously geocoded rows are skipped."
-python3 "${PROJECT_ROOT}/scripts/07_geocode.py"
+echo "To update production as well, re-run steps 6–7 against Supabase:"
+echo "  DATABASE_URL=\"\$SUPABASE_URL\" python3 scripts/06_load_database.py --dry-run"
+echo "  DATABASE_URL=\"\$SUPABASE_URL\" python3 scripts/06_load_database.py"
+echo "  DATABASE_URL=\"\$SUPABASE_URL\" python3 scripts/07_geocode.py"
 echo ""
-
 echo "=== Annual update complete. ==="
 echo "Restart the API server to serve updated data:"
 echo "  uvicorn api.main:app --port 8000 --reload"
