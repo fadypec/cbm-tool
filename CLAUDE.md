@@ -162,7 +162,7 @@ Choropleth styles are module-level constants (CHORO_STYLE_*) in app.js.
 
 ## Extraction model
 
-`claude-sonnet-4-20250514`, MAX_TOKENS=8192, CHUNK_MAX_CHARS=4000,
+`claude-sonnet-5-5` with server-side fallback (`scripts/model_config.py`), MAX_TOKENS=16000 (includes thinking), CHUNK_MAX_CHARS=4000,
 RATE_LIMIT_DELAY=10s (≤6 RPM). `parse_json_response` returns `dict | None`.
 
 ## Data safety
