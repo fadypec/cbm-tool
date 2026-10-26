@@ -1822,77 +1822,18 @@ function switchEntityTab(btn, tab) {
 // ── Search ─────────────────────────────────────────────────────────────────
 
 function initSearch() {
-    const input   = document.getElementById('search-input');
-    const results = document.getElementById('search-results');
+    const input = document.getElementById('search-input');
 
+    // The search box runs an AI query on Enter; Escape leaves the box.
     input.addEventListener('keydown', e => {
         if (e.key === 'Enter') {
             e.preventDefault();
             const q = input.value.trim();
-            if (q.length >= 3) {
-                results.classList.remove('open');
-                showAIQuery(q);
-            }
-            return;  // prevent falling through to the dropdown Enter handler below
-        }
-
-        if (!results.classList.contains('open')) return;
-        const items = [...results.querySelectorAll('li[data-idx]')];
-        const active = results.querySelector('li.sr-active');
-        const idx = active ? items.indexOf(active) : -1;
-
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            active?.classList.remove('sr-active');
-            (items[idx + 1] || items[0])?.classList.add('sr-active');
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            active?.classList.remove('sr-active');
-            (items[idx - 1] || items[items.length - 1])?.classList.add('sr-active');
+            if (q.length >= 3) showAIQuery(q);
+        } else if (e.key === 'Escape') {
+            input.blur();
         }
     });
-
-    // Close dropdown on clicks outside — mousedown fires before blur, so result
-    // clicks still register.  This avoids the fragile 200ms setTimeout approach.
-    document.addEventListener('mousedown', e => {
-        if (!results.contains(e.target) && e.target !== input) {
-            results.classList.remove('open');
-            input.setAttribute('aria-expanded', 'false');
-        }
-    });
-
-    document.addEventListener('keydown', e => {
-        if (e.key === 'Escape') { results.classList.remove('open'); input.setAttribute('aria-expanded', 'false'); input.blur(); }
-    });
-
-}
-
-
-const _LAYER_LABEL = { A1: 'Research', A2: 'Defence', G: 'Vaccine' };
-const _LAYER_COLOR = { A1: '#4a8ad4', A2: '#8b1a1a', G: '#0a7a6a' };
-
-// Highlight all occurrences of `term` within `text` (case-insensitive).
-// Returns an HTML string with matches wrapped in <mark>.
-function highlightTerm(text, term) {
-    if (!term || !text) return esc(text || '');
-    const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    return esc(text).replace(re, m => `<mark class="sr-hl">${m}</mark>`);
-}
-
-async function selectSearchResult(entityId, iso3, layer) {
-    document.getElementById('search-results').classList.remove('open');
-    document.getElementById('search-input').setAttribute('aria-expanded', 'false');
-    document.getElementById('search-input').value = '';
-    await selectCountry(iso3);
-    if (layer === 'A1' && entityId) {
-        // Switch to Research tab then show entity modal
-        switchDetailTab('research');
-        showEntityModal(entityId);
-    } else if (layer === 'G') {
-        switchDetailTab('vaccine');
-    } else if (layer === 'A2') {
-        switchDetailTab('defence');
-    }
 }
 
 // ── Copy permalink ─────────────────────────────────────────────────────────
@@ -3553,9 +3494,6 @@ function initEventDelegation() {
                 break;
             case 'show-vaccine-entity':
                 showVaccineEntityModal(el.dataset.entityId);
-                break;
-            case 'select-search-result':
-                selectSearchResult(el.dataset.entityId, el.dataset.iso3, el.dataset.layer);
                 break;
 
             // ── Sidebar / panels ──

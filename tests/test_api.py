@@ -202,6 +202,12 @@ class TestSearchValidation:
         r = c.get("/api/search?q=" + "x" * 500)
         assert r.status_code != 500
 
+    def test_query_over_400_chars_is_rejected(self, client):
+        c, pool = client
+        _setup_cursor(pool, fetchall=[])
+        assert c.get("/api/search?q=" + "x" * 401).status_code == 422
+        assert c.get("/api/search?q=" + "x" * 400).status_code == 200
+
     def test_search_returns_list(self, client):
         c, pool = client
         _setup_cursor(

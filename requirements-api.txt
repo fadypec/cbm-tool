@@ -1,8 +1,9 @@
 # Runtime dependencies for the FastAPI dashboard/API only.
 # Does not include extraction pipeline tools (pdfplumber, tesseract, etc.).
-psycopg2-binary>=2.9
-anthropic>=0.84
-python-dotenv>=1.0
-fastapi>=0.110
-uvicorn[standard]>=0.27
-slowapi>=0.1.9
+# Exact pins: the deployed image runs what CI tested. Dependabot proposes bumps.
+psycopg2-binary==2.9.11
+anthropic==0.84.0
+python-dotenv==1.2.2
+fastapi==0.135.1
+uvicorn[standard]==0.41.0
+slowapi==0.1.9

@@ -415,6 +415,16 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 _IMMUTABLE_EXTS = {".js", ".css", ".geojson", ".svg", ".png", ".ico", ".woff2"}
 
 
+# Exact package folders the dashboard loads from CDNs (each file also carries an
+# SRI hash in index.html). Whole-CDN sources would let injected markup load
+# any package published there.
+_CDN_SOURCES = (
+    "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/ "
+    "https://unpkg.com/leaflet@1.9.4/ "
+    "https://unpkg.com/leaflet.markercluster@1.5.3/"
+)
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Adds HTTP security headers to every response and long-lived Cache-Control
     headers to static assets (JS, CSS, GeoJSON) to reduce repeat bandwidth."""
@@ -437,11 +447,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # (e.g. inline style attributes). A nonce-based CSP is a future improvement.
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://cloud.umami.is; "
-            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; "
-            "img-src 'self' data: https:; "
+            f"script-src 'self' {_CDN_SOURCES} https://cloud.umami.is/script.js; "
+            f"style-src 'self' 'unsafe-inline' {_CDN_SOURCES}; "
+            # Map tiles, plus Leaflet's marker/layer icons referenced by its CSS
+            "img-src 'self' data: https://server.arcgisonline.com https://unpkg.com/leaflet@1.9.4/; "
             "connect-src 'self' https://cloud.umami.is https://gateway.umami.is; "
-            "font-src 'self' https://cdn.jsdelivr.net; "
+            "font-src 'self' https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/; "
+            "object-src 'none'; base-uri 'self'; form-action 'self'; "
             "frame-ancestors 'none';"
         )
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -1170,7 +1182,12 @@ def api_map_compliance(request: Request):
 @limiter.limit("60/minute")
 def api_search(
     request: Request,
-    q: str = Query(default="", min_length=2, description="Substring to search in names and activity descriptions"),
+    q: str = Query(
+        default="",
+        min_length=2,
+        max_length=400,
+        description="Substring to search in names and activity descriptions",
+    ),
 ):
     """Searches facility names, all_names aliases, and the free-text agents_summary
     (declared organisms and research activities) from Form A1 records.

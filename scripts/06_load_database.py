@@ -501,7 +501,14 @@ def refresh_facilities(cur, ids: list[str]) -> None:
                       canonical_facility_id, highest_containment, bsl4_area_m2, bsl3_area_m2
                FROM   facility_years
                WHERE  canonical_facility_id = ANY(%(ids)s)
-               ORDER  BY canonical_facility_id, year DESC) latest
+               -- latest year; if it has several rows, its highest containment
+               ORDER  BY canonical_facility_id, year DESC,
+                         CASE WHEN highest_containment ILIKE '%%4%%' THEN 4
+                              WHEN highest_containment ILIKE '%%3%%' THEN 3
+                              WHEN highest_containment ILIKE '%%2%%' THEN 2
+                              WHEN highest_containment ILIKE '%%1%%' THEN 1
+                              ELSE 0 END DESC,
+                         COALESCE(bsl4_area_m2, bsl3_area_m2) DESC NULLS LAST) latest
         WHERE  f.canonical_facility_id = latest.canonical_facility_id
     """, {"ids": ids})
 
