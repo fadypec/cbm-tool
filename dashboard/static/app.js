@@ -313,13 +313,28 @@ function applyTheme(theme) {
 function _swapTile(theme) {
     if (!map || !_tileLayer) return;
     map.removeLayer(_tileLayer);
-    _tileLayer = L.tileLayer(TILE_URLS[theme], {
+    _tileLayer = _makeTileLayer(theme).addTo(map);
+    _tileLayer.bringToBack();
+}
+
+// Leaflet's noWrap still requests tiles past the antimeridian (x < 0 or
+// x >= 2^z); Esri answers those with a "Map data not yet available" tile, so
+// clamp requests to the real world with `bounds`.
+function _makeTileLayer(theme) {
+    return L.tileLayer(TILE_URLS[theme], {
         attribution: TILE_ATTRIBUTION,
         maxNativeZoom: TILE_MAX_NATIVE_ZOOM,
         maxZoom: 19,
-        noWrap:  true,
-    }).addTo(map);
-    _tileLayer.bringToBack();
+        noWrap: true,
+        bounds: [[-90, -180], [90, 180]],
+    });
+}
+
+// Lowest zoom at which the world (256 * 2^z px) still fills the map's width,
+// so wide screens don't show empty gutters either side. Never below 2.
+function _fitWorldMinZoom() {
+    const z = Math.log2(map.getSize().x / 256);
+    return Math.max(2, Math.ceil(z * 4) / 4);
 }
 
 // ── Map ────────────────────────────────────────────────────────────────────
@@ -329,16 +344,15 @@ function initMap() {
     map = L.map('map', {
         zoomControl: false,
         minZoom: 2,
+        zoomSnap: 0.25,
         maxBounds: [[-90, -180], [90, 180]],
         maxBoundsViscosity: 1.0,
-    }).setView([20, 0], 2);
+    });
+    map.setMinZoom(_fitWorldMinZoom());
+    map.setView([20, 0], map.getMinZoom());
+    map.on('resize', () => map.setMinZoom(_fitWorldMinZoom()));
     const theme = document.documentElement.dataset.theme || 'dark';
-    _tileLayer = L.tileLayer(TILE_URLS[theme], {
-        attribution: TILE_ATTRIBUTION,
-        maxNativeZoom: TILE_MAX_NATIVE_ZOOM,
-        maxZoom: 19,
-        noWrap: true,
-    }).addTo(map);
+    _tileLayer = _makeTileLayer(theme).addTo(map);
     L.control.zoom({ position: 'topright' }).addTo(map);
 }
 
