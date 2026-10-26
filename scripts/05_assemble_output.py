@@ -581,6 +581,26 @@ def _resolve_entities_core(
     return id_map
 
 
+def warn_mixed_document_entities(records: list[dict], id_map: dict[int, str], label: str) -> None:
+    """Log entities holding differently named records from one document.
+
+    A submission lists each facility once, so this usually means two
+    facilities were chained together across years (e.g. KEN "HIV Reference
+    Lab" + "TB Reference Lab", fixed in migration 024) — but it is also how a
+    form that names one facility two ways looks, so it is a review list, not
+    an automatic split."""
+    names: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for i, rec in enumerate(records):
+        doc = (rec.get("extraction_metadata") or {}).get("source_id", "")
+        names[(id_map[i], doc)].add(rec.get("facility_name") or "")
+    mixed = sorted((eid, doc, sorted(n)) for (eid, doc), n in names.items() if len(n) > 1)
+    if mixed:
+        log.warning("%s: %d entity/document pairs mix several facility names — review for "
+                    "over-merges:", label, len(mixed))
+        for eid, doc, n in mixed:
+            log.warning("  %s in %s: %s", eid, doc, " | ".join(n))
+
+
 def resolve_entities(records: list[dict]) -> dict[int, str]:
     """Assign a canonical_facility_id to each A1 research facility record."""
     return _resolve_entities_core(
@@ -900,6 +920,7 @@ def main() -> None:
 
     log.info("Resolving entities (threshold=%d)…", SIMILARITY_THRESHOLD)
     id_map = resolve_entities(records)
+    warn_mixed_document_entities(records, id_map, "Research facilities (A1)")
     unique = len({v for v in id_map.values()})
     log.info("Entity resolution complete: %d records → %d unique facilities",
              len(records), unique)
@@ -939,6 +960,7 @@ def main() -> None:
 
         log.info("Resolving vaccine entities (threshold=%d)…", SIMILARITY_THRESHOLD)
         v_id_map = resolve_vaccine_entities(vaccine_records)
+        warn_mixed_document_entities(vaccine_records, v_id_map, "Vaccine facilities (G)")
         v_unique = len({v for v in v_id_map.values()})
         log.info("Vaccine entity resolution: %d records → %d unique facilities",
                  len(vaccine_records), v_unique)
@@ -988,6 +1010,7 @@ def main() -> None:
         log.info("Wrote %s (%d rows)", dp_csv, len(dp_flat))
 
         df_id_map = resolve_defence_facility_entities(defence_facilities)
+        warn_mixed_document_entities(defence_facilities, df_id_map, "Defence facilities (A2)")
         df_flat = []
         for i, rec in enumerate(defence_facilities):
             d = flatten_defence_facility(rec)

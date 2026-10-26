@@ -319,6 +319,31 @@ def assign_local_filename(meta: dict, used_ids: dict[str, int]) -> str:
 # ── Download ───────────────────────────────────────────────────────────────
 
 
+def _save_pdf(resp: requests.Response, dest: Path) -> bool:
+    """Stream a response into dest atomically; returns False on failure.
+
+    Writes to a .part file and renames only once the whole body has arrived
+    and looks like a PDF: a truncated file at dest would be skipped as
+    "already exists" by every later run."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with part.open("wb") as fh:
+            for chunk in resp.iter_content(chunk_size=65536):
+                fh.write(chunk)
+        with part.open("rb") as fh:
+            if fh.read(5) != b"%PDF-":
+                log.error("Response for %s is not a PDF — discarding", dest.name)
+                part.unlink()
+                return False
+        part.replace(dest)
+        return True
+    except (requests.RequestException, OSError) as exc:
+        log.error("Download of %s interrupted: %s", dest.name, exc)
+        part.unlink(missing_ok=True)
+        return False
+
+
 def download_pdf(
     session: requests.Session, url: str, dest: Path, *, first: bool
 ) -> bool:
@@ -339,10 +364,8 @@ def download_pdf(
         log.error("Download failed for %s: %s", url, exc)
         return False
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open("wb") as fh:
-        for chunk in resp.iter_content(chunk_size=65536):
-            fh.write(chunk)
+    if not _save_pdf(resp, dest):
+        return False
 
     log.info("Downloaded %s → %s (%d bytes)", url, dest.name, dest.stat().st_size)
     return True
@@ -387,10 +410,8 @@ def download_pdf_from_un(
                           max_attempts, un_id, exc)
                 return False
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open("wb") as fh:
-        for chunk in resp.iter_content(chunk_size=65536):
-            fh.write(chunk)
+    if not _save_pdf(resp, dest):
+        return False
 
     log.info("Downloaded UN id=%d → %s (%d bytes)", un_id, dest.name, dest.stat().st_size)
     return True
