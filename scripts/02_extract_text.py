@@ -94,7 +94,7 @@ VISION_LANGS: set[str] = {"ar", "zh"}
 
 # ── OCR LLM correction ────────────────────────────────────────────────────────
 
-from model_config import MODEL as OCR_CORRECTION_MODEL
+from model_config import create_message, response_text
 OCR_PAGE_MAX_CHARS   = 6_000   # pages larger than this are not sent for correction
 
 _CORRECTION_PROMPT = (
@@ -266,9 +266,10 @@ def correct_ocr_pages(
             continue
 
         try:
-            resp = client.messages.create(
-                model=OCR_CORRECTION_MODEL,
-                max_tokens=4096,
+            # A 6 000-char page is ~2 000 tokens of output, plus thinking
+            resp = create_message(
+                client,
+                max_tokens=8192,
                 messages=[
                     {
                         "role": "user",
@@ -280,7 +281,9 @@ def correct_ocr_pages(
                     }
                 ],
             )
-            corrected = resp.content[0].text.strip()
+            corrected = response_text(resp)
+            if resp.stop_reason == "max_tokens" or not corrected:
+                raise RuntimeError(f"incomplete correction (stop_reason={resp.stop_reason})")
         except Exception as exc:
             log.warning(
                 "[%s] OCR correction failed on page %d: %s — keeping original",

@@ -456,6 +456,40 @@ def catalogue_from_existing() -> list[dict]:
     return entries
 
 
+# ── Catalogue persistence ─────────────────────────────────────────────────
+
+
+def write_catalogue(entries: list[dict], *, inferred: bool = False) -> list[dict]:
+    """Merge freshly built entries into the existing catalogue and write it.
+
+    Later stages and manual curation add fields this script cannot rebuild
+    (is_amendment flags, OCR metadata from script 02, language/source_url that
+    --skip-download only knows as null). New non-null values win; everything
+    else is carried over. With inferred=True (metadata guessed from filenames
+    by --skip-download) existing values win instead. Entries no longer found are kept, with a warning,
+    rather than silently dropped from the pipeline.
+    """
+    previous: dict[str, dict] = {}
+    if CATALOGUE_PATH.exists():
+        previous = {e["id"]: e for e in json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))}
+
+    merged = []
+    for entry in entries:
+        old = previous.pop(entry["id"], {})
+        fresh = {k: v for k, v in entry.items() if v is not None}
+        merged.append({**fresh, **old} if inferred else {**old, **fresh})
+    if previous:
+        log.warning("%d catalogue entries not found this run — keeping previous records: %s",
+                    len(previous), ", ".join(sorted(previous)[:10]))
+        merged.extend(previous.values())
+
+    # Write to a temp file and rename so an interrupted run can't truncate it
+    tmp = CATALOGUE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(CATALOGUE_PATH)
+    return merged
+
+
 # ── Main ───────────────────────────────────────────────────────────────────
 
 
@@ -474,9 +508,7 @@ def main() -> None:
         log.info("--skip-download: cataloguing existing files in %s", RAW_PDFS_DIR)
         entries = catalogue_from_existing()
         log.info("Found %d local PDFs", len(entries))
-        CATALOGUE_PATH.write_text(
-            json.dumps(entries, indent=2, ensure_ascii=False) + "\n"
-        )
+        entries = write_catalogue(entries, inferred=True)
         log.info("Catalogue written to %s", CATALOGUE_PATH)
         _print_summary(entries)
         return
@@ -518,9 +550,7 @@ def main() -> None:
 
         entries.append(build_entry(src["source_url"], local_path, meta, filename, downloaded))
 
-    CATALOGUE_PATH.write_text(
-        json.dumps(entries, indent=2, ensure_ascii=False) + "\n"
-    )
+    entries = write_catalogue(entries)
     log.info("Catalogue written to %s  (%d entries)", CATALOGUE_PATH, len(entries))
     _print_summary(entries)
 

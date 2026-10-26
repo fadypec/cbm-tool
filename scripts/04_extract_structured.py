@@ -96,11 +96,10 @@ class CatalogueEntry(BaseModel):
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-from model_config import MODEL
-# 8 192 output tokens is the practical ceiling for structured JSON responses
-# from Claude.  Extraction outputs average ~2 000 tokens; this headroom
-# accommodates facilities with unusually long organism lists.
-MAX_TOKENS       = 8192
+from model_config import ModelRefusal, create_message, response_text
+# Extraction JSON averages ~2 000 tokens; the budget also covers the model's
+# thinking (on by default) and facilities with unusually long organism lists.
+MAX_TOKENS       = 16_000
 # 4 000 chars keeps each API call within Claude's optimal context range for
 # structured extraction while ensuring most individual facility entries fit
 # in a single chunk.  Larger values risked truncated JSON responses; smaller
@@ -1103,8 +1102,8 @@ def api_call(
             wait = RATE_LIMIT_DELAY - (time.time() - last_t[0])
             if wait > 0:
                 time.sleep(wait)
-            resp = client.messages.create(
-                model=MODEL,
+            resp = create_message(
+                client,
                 max_tokens=MAX_TOKENS,
                 system=system,
                 messages=messages,
@@ -1119,6 +1118,9 @@ def api_call(
                 backoff, attempt + 1, max_attempts,
             )
             time.sleep(backoff)
+        except anthropic.BadRequestError:
+            # 400s (bad params, oversized input) fail the same way every time
+            raise
         except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
             # Transient server errors (5xx) or connection drops — shorter backoff
             if attempt < max_attempts - 1:
@@ -1128,6 +1130,11 @@ def api_call(
             else:
                 raise
     raise RuntimeError("Anthropic API: max retries exceeded after %d attempts" % max_attempts)
+
+
+class ExtractionFailed(RuntimeError):
+    """Claude's response could not be parsed. The document must not be
+    written out as a (silently empty) success, so a re-run retries it."""
 
 
 def call_and_parse(
@@ -1140,10 +1147,11 @@ def call_and_parse(
 ) -> tuple[dict | None, dict]:
     """
     Call the API, parse the JSON response, retry once if not valid JSON.
-    Returns (parsed_data_or_None, usage_dict).
+    Returns (parsed_data, usage_dict); raises ExtractionFailed if the retry
+    is still not valid JSON, and ModelRefusal if the model declines.
     """
     resp = api_call(client, messages, last_t, system=system)
-    raw = resp.content[0].text
+    raw = response_text(resp)
     usage = {
         "input_tokens": resp.usage.input_tokens,
         "output_tokens": resp.usage.output_tokens,
@@ -1161,12 +1169,13 @@ def call_and_parse(
          "Return ONLY the JSON object — no markdown fences, no explanation."},
     ]
     resp2 = api_call(client, messages, last_t, system=system)
-    raw2 = resp2.content[0].text
+    raw2 = response_text(resp2)
     usage["input_tokens"]  += resp2.usage.input_tokens
     usage["output_tokens"] += resp2.usage.output_tokens
     data = parse_json_response(raw2)
     if data is None:
-        log.error("[%s%s] Retry also returned invalid JSON", entry_id, tag)
+        raise ExtractionFailed(f"[{entry_id}{tag}] retry also returned invalid JSON "
+                               f"(stop_reason={resp2.stop_reason})")
     return data, usage
 
 
@@ -1190,8 +1199,6 @@ def extract_chunk(
     data, usage = call_and_parse(client, messages, last_t, entry["id"])
     log.debug("[%s] tokens in=%d out=%d", entry["id"],
               usage["input_tokens"], usage["output_tokens"])
-    if data is None:
-        return [], usage
     return data.get("facilities", []), usage
 
 
@@ -1346,8 +1353,6 @@ def extract_chunk_g(
     messages: list[dict] = [{"role": "user", "content": user_content}]
     data, usage = call_and_parse(client, messages, last_t, entry["id"],
                                  system=SYSTEM_PROMPT_G, form_tag="G")
-    if data is None:
-        return [], usage
     return data.get("vaccine_facilities", []), usage
 
 
@@ -1485,8 +1490,6 @@ def extract_chunk_a2(
     messages: list[dict] = [{"role": "user", "content": user_content}]
     data, usage = call_and_parse(client, messages, last_t, entry["id"],
                                  system=SYSTEM_PROMPT_A2, form_tag="A2")
-    if data is None:
-        return {"has_programme_declared": None, "defence_programmes": [], "defence_facilities": []}, usage
     return {
         "has_programme_declared": data.get("has_programme_declared"),
         "defence_programmes":     data.get("defence_programmes") or [],
@@ -1644,8 +1647,6 @@ def process_entry_f(
     messages: list[dict] = [{"role": "user", "content": user_content}]
     data, usage = call_and_parse(client, messages, last_t, entry_id,
                                  system=SYSTEM_PROMPT_F, form_tag="F")
-    if data is None:
-        data = {}
 
     data["extraction_metadata"] = {
         "source_id":    entry_id,
@@ -1782,8 +1783,6 @@ def process_entry_e(
     except Exception as exc:
         log.error("[%s/E] API error: %s", entry_id, exc)
         return {"id": entry_id, "status": "error", "error": str(exc)}
-    if data is None:
-        return {"id": entry_id, "status": "error", "calls": 2, **usage}
 
     cats = data.get("categories") or {}
     log.info("[%s/E] (%s) prohibitions=%s exports=%s | in=%d out=%d tokens",
@@ -1831,6 +1830,18 @@ def _write_output_e(
     )
 
 
+def _parse_json_array(raw: str) -> list | None:
+    """Parse a JSON array, tolerating surrounding prose/fences; None if unparseable."""
+    for candidate in (raw, *(m.group() for m in [re.search(r"\[.*\]", raw, re.S)] if m)):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, list):
+            return data
+    return None
+
+
 def process_entry_b(
     entry: dict,
     client: anthropic.Anthropic,
@@ -1870,29 +1881,17 @@ def process_entry_b(
     messages: list[dict] = [{"role": "user", "content": user_content}]
 
     resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_B)
-    raw  = resp.content[0].text.strip()
+    raw  = response_text(resp)
     usage = {
         "input_tokens":  resp.usage.input_tokens,
         "output_tokens": resp.usage.output_tokens,
     }
 
     # Parse JSON array response
-    outbreaks: list[dict] = []
-    try:
-        data = json.loads(raw)
-        if isinstance(data, list):
-            outbreaks = data
-    except json.JSONDecodeError:
-        m = re.search(r"\[.*\]", raw, re.S)
-        if m:
-            try:
-                data = json.loads(m.group())
-                if isinstance(data, list):
-                    outbreaks = data
-            except json.JSONDecodeError:
-                pass
+    outbreaks = _parse_json_array(raw)
 
-    if not outbreaks and raw:
+    # None means unparseable; [] is a valid "no outbreaks" answer
+    if outbreaks is None:
         log.warning("[%s/B] Could not parse response as JSON array — retrying once", entry_id)
         messages += [
             {"role": "assistant", "content": raw},
@@ -1901,15 +1900,12 @@ def process_entry_b(
              "Return ONLY a JSON array — no markdown fences, no explanation."},
         ]
         resp2 = api_call(client, messages, last_t, system=SYSTEM_PROMPT_B)
-        raw2  = resp2.content[0].text.strip()
+        raw2  = response_text(resp2)
         usage["input_tokens"]  += resp2.usage.input_tokens
         usage["output_tokens"] += resp2.usage.output_tokens
-        try:
-            data2 = json.loads(raw2)
-            if isinstance(data2, list):
-                outbreaks = data2
-        except json.JSONDecodeError:
-            log.error("[%s/B] Retry also returned invalid JSON", entry_id)
+        outbreaks = _parse_json_array(raw2)
+        if outbreaks is None:
+            raise ExtractionFailed(f"[{entry_id}/B] retry also returned invalid JSON")
 
     _write_output_b(out_path, entry, outbreaks, usage)
 
@@ -2074,25 +2070,32 @@ def main() -> None:
         desc = "Extracting Form A Part 1"
 
     for entry in tqdm(targets, desc=desc, unit="doc", dynamic_ncols=True, file=sys.stderr):
-        if args.form_a2:
-            result = process_entry_a2(entry, client, last_t)
-            item_key = None   # sum programmes + facilities
-        elif args.form_g:
-            result = process_entry_g(entry, client, last_t)
-            item_key = "vaccine_facilities"
-        elif args.form_f:
-            result = process_entry_f(entry, client, last_t)
+        try:
+            if args.form_a2:
+                result = process_entry_a2(entry, client, last_t)
+                item_key = None   # sum programmes + facilities
+            elif args.form_g:
+                result = process_entry_g(entry, client, last_t)
+                item_key = "vaccine_facilities"
+            elif args.form_f:
+                result = process_entry_f(entry, client, last_t)
+                item_key = None
+            elif args.form_e:
+                result = process_entry_e(entry, client, last_t)
+                item_key = None
+            elif args.form_b:
+                # FEATURE 9: Form B dispatch
+                result = process_entry_b(entry, client, last_t)
+                item_key = "outbreaks"
+            else:
+                result = process_entry(entry, client, last_t)
+                item_key = "facilities"
+        except (ExtractionFailed, ModelRefusal, anthropic.APIError) as exc:
+            # No output file is written, so the next run retries this document
+            # (chunked forms resume from their .partial.json checkpoint).
+            log.error("[%s] extraction failed: %s: %s", entry["id"], type(exc).__name__, exc)
+            result = {"id": entry["id"], "status": "error", "error": str(exc)}
             item_key = None
-        elif args.form_e:
-            result = process_entry_e(entry, client, last_t)
-            item_key = None
-        elif args.form_b:
-            # FEATURE 9: Form B dispatch
-            result = process_entry_b(entry, client, last_t)
-            item_key = "outbreaks"
-        else:
-            result = process_entry(entry, client, last_t)
-            item_key = "facilities"
         results.append(result)
 
         status = result.get("status", "")

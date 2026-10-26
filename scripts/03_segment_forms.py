@@ -50,7 +50,7 @@ SEGMENTED_DIR = PROJECT_ROOT / "data" / "segmented"
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-from model_config import MODEL
+from model_config import create_message, response_text
 REGEX_MIN_FORMS = 2          # fall back to LLM if fewer than this many forms found
 NTD_MAX_CHARS = 2000         # forms shorter than this may be "nothing to declare"
 
@@ -419,12 +419,13 @@ PAGE INDEX:
 
     log.info("[%s] Calling Claude API for LLM segmentation fallback", entry_id)
     time.sleep(10)  # match RATE_LIMIT_DELAY in script 04 (≤6 req/min)
-    message = client.messages.create(
-        model=MODEL,
-        max_tokens=512,
+    # The JSON answer is ~100 tokens; the rest is headroom for thinking
+    message = create_message(
+        client,
+        max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
-    raw = message.content[0].text.strip()
+    raw = response_text(message)
 
     # Extract JSON from response (Claude may wrap it in markdown)
     json_match = re.search(r"\{.*\}", raw, re.S)

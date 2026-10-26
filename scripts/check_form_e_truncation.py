@@ -45,13 +45,13 @@ def _call(client, text: str, last_t: list[float]) -> tuple[dict, int, int]:
     """Call API and return (parsed JSON dict, input_tokens, output_tokens)."""
     messages = [{"role": "user", "content": text}]
     resp = api_call(client, messages, last_t, system=SYSTEM_PROMPT_E)
-    raw = resp.content[0].text.strip()
+    raw = _s04.response_text(resp)
     data = parse_json_response(raw)
     if data is None:
         messages.append({"role": "assistant", "content": raw})
         messages.append({"role": "user", "content": "Return only valid JSON, no other text."})
         resp2 = api_call(client, messages, last_t, system=SYSTEM_PROMPT_E)
-        data = parse_json_response(resp2.content[0].text.strip())
+        data = parse_json_response(_s04.response_text(resp2))
     tokens_in  = resp.usage.input_tokens
     tokens_out = resp.usage.output_tokens
     return data or {}, tokens_in, tokens_out

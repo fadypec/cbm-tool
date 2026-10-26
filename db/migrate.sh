@@ -19,7 +19,8 @@ if [[ -z "${DATABASE_URL:-}" && -f "$ENV_FILE" ]]; then
 fi
 DATABASE_URL="${DATABASE_URL:-postgresql://cbm:cbm@localhost:5432/cbm}"
 
-echo "Target: $DATABASE_URL"
+# Never echo the password embedded in the connection string
+echo "Target: $(sed -E 's#://([^:/@]+):[^@]*@#://\1:***@#' <<<"$DATABASE_URL")"
 
 # Ensure the migrations-tracking table exists
 psql "$DATABASE_URL" --quiet -c "
@@ -44,7 +45,9 @@ for migration in $(ls "$MIGRATIONS_DIR"/*.sql | sort); do
 
     if [[ "$already_applied" == "0" ]]; then
         echo "  Applying $fname …"
-        psql "$DATABASE_URL" --quiet -f "$migration"
+        # ON_ERROR_STOP makes psql exit non-zero on the first SQL error, so
+        # set -e aborts before a failed migration is recorded as applied.
+        psql "$DATABASE_URL" --quiet -v ON_ERROR_STOP=1 -f "$migration"
         psql "$DATABASE_URL" --quiet \
             -c "INSERT INTO schema_migrations (filename) VALUES ('$fname_escaped')"
         echo "  ✓ $fname"
